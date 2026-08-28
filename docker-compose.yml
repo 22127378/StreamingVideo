@@ -1,0 +1,29 @@
+services:
+  localstack:
+    container_name: streamforge-localstack
+    image: localstack/localstack:latest
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack Gateway
+      - "127.0.0.1:4510-4559:4510-4559"  # External service port range
+    environment:
+      - SERVICES=s3,sqs,dynamodb
+      - AWS_DEFAULT_REGION=us-east-1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - DEBUG=1
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./.localstack}:/var/lib/localstack"
+      - "./scripts/init-aws-local.sh:/etc/localstack/init/ready.d/init-aws-local.sh"
+      - "./scripts/cors-config.json:/tmp/cors-config.json"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - streamforge-network
+
+networks:
+  streamforge-network:
+    name: streamforge-network
+    driver: bridge
