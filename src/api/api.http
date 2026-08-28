@@ -1,0 +1,57 @@
+### 1. Health Check
+GET http://localhost:4000/health
+
+### 2. Request S3 Presigned Upload URL
+POST http://localhost:4000/api/videos/upload-url
+Content-Type: application/json
+
+{
+  "fileName": "big_buck_bunny_1080p.mp4",
+  "contentType": "video/mp4",
+  "title": "Big Buck Bunny HD",
+  "description": "Bản hoạt hình kinh điển 1080p 60fps để kiểm thử transcoding pipeline.",
+  "tier": "free"
+}
+
+### 3. Complete Upload & Trigger Transcode Pipeline
+# Thay @videoId bằng videoId nhận được ở bước 2
+POST http://localhost:4000/api/videos/complete
+Content-Type: application/json
+
+{
+  "videoId": "PUT_VIDEO_ID_HERE"
+}
+
+### 4. List All Videos
+GET http://localhost:4000/api/videos
+
+### 5. Get Video Details by ID
+# Thay @videoId bằng ID tương ứng
+GET http://localhost:4000/api/videos/PUT_VIDEO_ID_HERE
+
+### 6. Issue Playback Access Token (Free Tier)
+POST http://localhost:4000/api/auth/playback-token
+Content-Type: application/json
+
+{
+  "userId": "user-demo-001",
+  "tier": "free"
+}
+
+### 7. Issue Playback Access Token (Premium Tier)
+POST http://localhost:4000/api/auth/playback-token
+Content-Type: application/json
+
+{
+  "userId": "user-vip-999",
+  "tier": "premium"
+}
+
+### 8. Verify Playback Access
+POST http://localhost:4000/api/auth/verify-playback
+Content-Type: application/json
+Authorization: Bearer PUT_JWT_TOKEN_HERE
+
+{
+  "videoId": "PUT_VIDEO_ID_HERE"
+}
