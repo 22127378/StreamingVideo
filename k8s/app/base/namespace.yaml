@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: streamforge
+---
+# Tên ServiceAccount phải khớp aws_eks_pod_identity_association ở terraform/layers/compute
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-worker
+  namespace: streamforge

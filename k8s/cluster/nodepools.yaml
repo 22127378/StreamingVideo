@@ -1,0 +1,82 @@
+# NodePool cho EKS Auto Mode (Karpenter do AWS quản lý).
+# Weight 100 cao hơn các pool có sẵn (general-purpose, system) nên được ưu tiên.
+
+# API và KEDA: on-demand, instance burstable nhỏ (pod của chúng chỉ cần vài trăm millicore)
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: streamforge-app
+spec:
+  weight: 100
+  template:
+    metadata:
+      labels:
+        streamforge.io/pool: app
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-family
+          operator: In
+          values: ["t3", "t3a"]
+        - key: eks.amazonaws.com/instance-size
+          operator: In
+          values: ["medium", "large"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      expireAfter: 336h
+  limits:
+    cpu: "8"
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+---
+# Transcode worker: Spot, compute-optimized. Không có job thì KEDA đưa worker về 0 pod
+# và node bị thu hồi sau consolidateAfter, nên không tốn tiền khi rảnh.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: streamforge-transcode
+spec:
+  weight: 100
+  template:
+    metadata:
+      labels:
+        streamforge.io/pool: transcode
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      taints:
+        - key: streamforge.io/workload
+          value: transcode
+          effect: NoSchedule
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["2", "4"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      expireAfter: 72h
+  limits:
+    cpu: "16"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 2m

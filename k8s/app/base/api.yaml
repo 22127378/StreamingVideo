@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+  labels:
+    app: streamforge-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-api
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-api
+    spec:
+      serviceAccountName: streamforge-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: streamforge-api
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            # CloudFront + ALB đứng trước API
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: streamforge-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+spec:
+  selector:
+    app: streamforge-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# ALB public nhưng security group chỉ mở cho CloudFront (overlay thêm annotation security-groups)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/manage-backend-security-group-rules: "true"
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: streamforge-api
+                port:
+                  name: http

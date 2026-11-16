@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-worker
+  namespace: streamforge
+  labels:
+    app: streamforge-worker
+spec:
+  # KEDA quản lý số replica (0 khi queue rỗng)
+  replicas: 0
+  selector:
+    matchLabels:
+      app: streamforge-worker
+  template:
+    metadata:
+      labels:
+        app: streamforge-worker
+      annotations:
+        # Karpenter không thu hồi node khi pod đang transcode
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      serviceAccountName: streamforge-worker
+      # Lớn hơn SHUTDOWN_GRACE_SECONDS (25s) để worker kịp trả message về queue
+      terminationGracePeriodSeconds: 40
+      nodeSelector:
+        streamforge.io/pool: transcode
+      tolerations:
+        - key: streamforge.io/workload
+          operator: Equal
+          value: transcode
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: streamforge-worker
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          resources:
+            requests:
+              cpu: 1500m
+              memory: 2Gi
+              ephemeral-storage: 10Gi
+            limits:
+              memory: 3Gi
+              ephemeral-storage: 20Gi
+          volumeMounts:
+            - name: temp
+              mountPath: /app/temp
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        # File tải về và output HLS
+        - name: temp
+          emptyDir:
+            sizeLimit: 20Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+---
+# KEDA đọc độ dài queue bằng quyền của chính operator (Pod Identity role "keda")
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: streamforge-aws
+  namespace: streamforge
+spec:
+  podIdentity:
+    provider: aws
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: streamforge-worker
+  namespace: streamforge
+spec:
+  scaleTargetRef:
+    name: streamforge-worker
+  minReplicaCount: 0
+  maxReplicaCount: 4
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: aws-sqs-queue
+      authenticationRef:
+        name: streamforge-aws
+      metadata:
+        # queueURL do overlay điền
+        queueURL: REPLACED_BY_OVERLAY
+        awsRegion: us-east-1
+        # Mỗi worker xử lý 1 job; tính cả message đang xử lý để không scale down giữa chừng
+        queueLength: "1"
+        scaleOnInFlight: "true"

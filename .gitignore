@@ -39,3 +39,6 @@ crash.log
 !*.tfvars.example
 terraform/backend.hcl
 *_override.tf
+
+# Overlay do k8s/deploy.sh sinh (chứa account ID)
+k8s/app/overlays/
