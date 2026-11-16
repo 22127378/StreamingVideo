@@ -15,11 +15,58 @@ services:
       - "./scripts/init-aws-local.sh:/etc/localstack/init/ready.d/init-aws-local.sh"
       - "./scripts/cors-config.json:/tmp/cors-config.json"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
-      interval: 10s
+      # Healthy khi init script (tạo bucket, queue, table) đã chạy xong
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/init/ready | grep -q '\"completed\": true'"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
       start_period: 15s
+    networks:
+      - streamforge-network
+
+  # API và worker chạy trong container: docker compose --profile app up -d --build
+  # Không có profile thì chỉ LocalStack khởi động (để chạy API/worker bằng npm trên máy).
+  api:
+    profiles: ["app"]
+    container_name: streamforge-api
+    build:
+      context: ./src/api
+      dockerfile: ../../docker/api.Dockerfile
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment: &app-env
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      # Presigned URL và link phát do trình duyệt gọi nên dùng localhost
+      AWS_S3_PUBLIC_ENDPOINT: http://localhost:4566
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      S3_RAW_UPLOADS_BUCKET: streamforge-raw-uploads
+      S3_PROCESSED_BUCKET: streamforge-processed
+      SQS_TRANSCODE_QUEUE_URL: http://localstack:4566/000000000000/streamforge-transcode-queue
+      DYNAMODB_VIDEOS_TABLE: streamforge-videos
+      CDN_BASE_URL: http://localhost:4566/streamforge-processed
+      # Image chạy NODE_ENV=production nên cần secret >= 32 ký tự. Chỉ dùng cho local.
+      JWT_SECRET: local-compose-secret-not-for-production-use
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - streamforge-network
+
+  worker:
+    profiles: ["app"]
+    container_name: streamforge-worker
+    build:
+      context: ./src/transcode-worker
+      dockerfile: ../../docker/worker.Dockerfile
+    environment: *app-env
+    # Lớn hơn SHUTDOWN_GRACE_SECONDS (25s) để worker kịp trả message về queue
+    stop_grace_period: 40s
+    depends_on:
+      localstack:
+        condition: service_healthy
     networks:
       - streamforge-network
 
