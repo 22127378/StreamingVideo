@@ -108,9 +108,11 @@ Terraform lives in `terraform/`, split into layers that are applied separately. 
 | storage | Built | Raw and processed S3 buckets, DynamoDB `videos` table with its GSI |
 | messaging | Built | Transcode SQS queue and DLQ |
 | identity | Built | Least-privilege IAM policies for the API and worker, plus dev roles |
-| networking | Planned | VPC, subnets, NAT gateway, security groups |
-| compute | Planned | EKS with on-demand and Spot node groups, KEDA, IRSA roles using the identity policies |
-| delivery | Planned | CloudFront with signed cookies in front of the processed bucket and the ALB |
+| networking | Built | VPC across 2 AZs, public and private subnets, one NAT gateway |
+| compute | Built | EKS Auto Mode, ECR, EKS Pod Identity roles using the identity policies, ALB security group open to CloudFront only |
+| delivery | Built | CloudFront: HLS from the processed bucket via OAC, `/api/*` to the ALB. Signed cookies not done yet |
+
+The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA scaling the worker from 0 on queue depth, and `k8s/deploy.sh` to build, push and apply. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and EKS Pod Identity replaces IRSA. ArgoCD is not set up yet.
 
 EventBridge is left out for now. The API already queues a job when the client calls `/api/videos/complete`, so adding an S3 → EventBridge → SQS rule on top would transcode every video twice.
 

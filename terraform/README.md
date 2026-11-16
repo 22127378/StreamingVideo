@@ -1,13 +1,18 @@
 # StreamForge Terraform
 
-Hạ tầng AWS cho StreamForge, chia thành các layer áp dụng độc lập. Hiện có 4 layer, đều rẻ khi không có traffic. Layer networking và compute (VPC, EKS, KEDA) và CloudFront sẽ làm sau.
+Hạ tầng AWS cho StreamForge, chia thành các layer áp dụng độc lập theo thứ tự trong bảng.
 
-| Layer | Tạo gì | Phụ thuộc |
-| --- | --- | --- |
-| `backend` | Bucket chứa state (versioning, mã hoá KMS, chỉ cho TLS) và AWS Budget alarm | Không. State của layer này nằm trên máy |
-| `storage` | Bucket `raw` và `processed`, bảng DynamoDB `videos` với GSI `entityType-createdAt-index` | `backend` |
-| `messaging` | SQS `transcode` và DLQ (`maxReceiveCount` 3, visibility 300s) | `backend` |
-| `identity` | IAM policy tối thiểu quyền cho API và worker, cộng hai dev role | `storage`, `messaging` |
+| Layer | Tạo gì | Phụ thuộc | Chi phí khi không có traffic |
+| --- | --- | --- | --- |
+| `backend` | Bucket chứa state (versioning, mã hoá KMS, chỉ cho TLS) và AWS Budget alarm | Không. State của layer này nằm trên máy | ~$1/tháng (KMS) |
+| `storage` | Bucket `raw` và `processed` (CloudFront đọc qua OAC), bảng DynamoDB `videos` với GSI `entityType-createdAt-index` | `backend` | Gần 0 |
+| `messaging` | SQS `transcode` và DLQ (`maxReceiveCount` 3, visibility 300s) | `backend` | Gần 0 |
+| `identity` | IAM policy tối thiểu quyền cho API và worker, cộng hai dev role | `storage`, `messaging` | 0 |
+| `networking` | VPC 2 AZ, subnet public/private, 1 NAT gateway | `backend` | ~$33/tháng (NAT) |
+| `compute` | EKS Auto Mode, ECR, security group ALB chỉ mở cho CloudFront, Pod Identity cho API, worker và KEDA | `networking`, `identity` | ~$73/tháng (control plane) cộng node |
+| `delivery` | CloudFront: HLS từ bucket `processed`, `/api/*` tới ALB | `compute` và Ingress của API | Gần 0, tính theo traffic |
+
+Ứng dụng chạy trên EKS được deploy bằng `k8s/deploy.sh` (xem mục "Deploy ứng dụng" bên dưới).
 
 Khoá state dùng S3 lockfile (`use_lockfile`, Terraform 1.10 trở lên) thay vì bảng DynamoDB.
 
@@ -57,6 +62,30 @@ source_profile = default
 rồi chạy `AWS_PROFILE=streamforge-api-dev npm run dev` trong `src/api` (tương tự với `worker`). Thiếu quyền nào thì request sẽ báo `AccessDenied`, đúng như khi chạy trên EKS.
 
 Bucket `processed` là private, nên `streamingUrl` chưa phát được trên AWS thật cho tới khi có CloudFront. Luồng upload, transcode, `READY` và xoá vẫn chạy đầy đủ.
+
+## Deploy ứng dụng lên EKS
+
+```bash
+for layer in networking compute; do
+  (cd terraform/layers/$layer && terraform init -backend-config=../../backend.hcl && terraform apply)
+done
+
+./k8s/deploy.sh      # build + push image lên ECR, NodePool, KEDA, API, worker; in ra DNS của ALB
+
+cd terraform/layers/delivery
+terraform init -backend-config=../../backend.hcl
+terraform apply -var "api_alb_dns_name=<DNS của ALB>"
+cd -
+SKIP_BUILD=1 ./k8s/deploy.sh    # trỏ CDN_BASE_URL sang CloudFront
+```
+
+Sau đó API nằm ở `https://<cloudfront-domain>/api/...` và link phát HLS ở `https://<cloudfront-domain>/<videoId>/master.m3u8`.
+
+- Pod: API (2 replica) chạy trên NodePool `streamforge-app` gồm node on-demand t3/t3a. Worker chạy trên NodePool `streamforge-transcode` gồm node Spot, có taint riêng.
+- KEDA đọc độ dài queue và co giãn worker từ 0 đến 4 pod. Khi không có job, node Spot bị thu hồi sau 2 phút.
+- Nếu `aws login` không dùng được cho backend S3 của Terraform, dùng một profile có `credential_process = aws configure export-credentials --format process`.
+
+Tắt hẳn để không tốn tiền: `terraform destroy` lần lượt các layer `delivery`, `compute`, `networking`. Trước khi destroy `compute`, xoá Ingress (`kubectl delete ns streamforge`) để ALB do Kubernetes tạo được gỡ trước. Các layer còn lại gần như không tốn tiền nên có thể giữ.
 
 ## Kiểm tra trước khi áp dụng
 
