@@ -54,6 +54,21 @@ export const config = {
     process.env.SQS_TRANSCODE_QUEUE_URL ||
     'http://localhost:4566/000000000000/streamforge-transcode-queue',
   videosTable: process.env.DYNAMODB_VIDEOS_TABLE || 'streamforge-videos',
+  videosByCreatedAtIndex: process.env.DYNAMODB_VIDEOS_CREATED_AT_INDEX || 'entityType-createdAt-index',
   cdnBaseUrl: process.env.CDN_BASE_URL || 'http://localhost:4566/streamforge-processed',
-  jwtSecret: process.env.JWT_SECRET || 'streamforge-super-secret-key-2026',
+  jwtSecret: resolveJwtSecret(),
 };
+
+/**
+ * Ở production bắt buộc có JWT_SECRET đủ dài. Secret mặc định chỉ dùng cho local.
+ */
+function resolveJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if ((process.env.NODE_ENV || 'development') === 'production') {
+    if (!secret || secret.length < 32) {
+      throw new Error('JWT_SECRET phải được cấu hình và dài ít nhất 32 ký tự khi NODE_ENV=production');
+    }
+    return secret;
+  }
+  return secret || 'streamforge-local-dev-secret';
+}

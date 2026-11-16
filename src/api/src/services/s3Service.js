@@ -1,4 +1,9 @@
-import { PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import {
+  PutObjectCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client, config } from '../config/aws.js';
 
@@ -61,4 +66,42 @@ export async function checkFileExistsOnS3(bucket, key) {
     console.warn(`[s3Service] HeadObject warning for ${key}:`, error.message);
     return { exists: false, error: error.message };
   }
+}
+
+/**
+ * Xóa toàn bộ object có cùng prefix (ví dụ tất cả segment HLS của một video)
+ * @param {string} bucket
+ * @param {string} prefix Phải kết thúc bằng "/" để không xóa nhầm prefix dài hơn
+ * @returns {Promise<number>} Số object đã xóa
+ */
+export async function deleteS3Prefix(bucket, prefix) {
+  if (!prefix.endsWith('/')) {
+    throw new Error(`Prefix phải kết thúc bằng "/": ${prefix}`);
+  }
+
+  let deleted = 0;
+  let continuationToken;
+  do {
+    const page = await s3Client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken })
+    );
+    const objects = (page.Contents || []).map(({ Key }) => ({ Key }));
+
+    if (objects.length > 0) {
+      const result = await s3Client.send(
+        new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } })
+      );
+      if (result.Errors?.length) {
+        const first = result.Errors[0];
+        throw new Error(
+          `Không xóa được ${result.Errors.length} object trong s3://${bucket}/${prefix} (${first.Key}: ${first.Message})`
+        );
+      }
+      deleted += objects.length;
+    }
+
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return deleted;
 }

@@ -22,12 +22,19 @@ Content-Type: application/json
   "videoId": "PUT_VIDEO_ID_HERE"
 }
 
-### 4. List All Videos
-GET http://localhost:4000/api/videos
+### 4. List Videos (newest first, paginated)
+GET http://localhost:4000/api/videos?limit=20
+
+### 4b. Next page / filter by status
+# Thay PUT_NEXT_TOKEN_HERE bằng nextToken của response trước
+GET http://localhost:4000/api/videos?limit=20&status=READY&nextToken=PUT_NEXT_TOKEN_HERE
 
 ### 5. Get Video Details by ID
 # Thay @videoId bằng ID tương ứng
 GET http://localhost:4000/api/videos/PUT_VIDEO_ID_HERE
+
+### 5b. Delete Video (also removes raw and HLS files on S3)
+DELETE http://localhost:4000/api/videos/PUT_VIDEO_ID_HERE
 
 ### 6. Issue Playback Access Token (Free Tier)
 POST http://localhost:4000/api/auth/playback-token
@@ -38,13 +45,14 @@ Content-Type: application/json
   "tier": "free"
 }
 
-### 7. Issue Playback Access Token (Premium Tier)
+### 7. Issue Playback Access Token (Premium Tier, scoped to one video)
 POST http://localhost:4000/api/auth/playback-token
 Content-Type: application/json
 
 {
   "userId": "user-vip-999",
-  "tier": "premium"
+  "tier": "premium",
+  "videoId": "PUT_VIDEO_ID_HERE"
 }
 
 ### 8. Verify Playback Access

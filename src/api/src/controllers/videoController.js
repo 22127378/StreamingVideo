@@ -1,12 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { generateUploadPresignedUrl, checkFileExistsOnS3 } from '../services/s3Service.js';
+import {
+  generateUploadPresignedUrl,
+  checkFileExistsOnS3,
+  deleteS3Prefix,
+} from '../services/s3Service.js';
 import {
   createVideoRecord,
   updateVideoStatus,
   getVideoById,
-  getAllVideos,
+  listVideos as queryVideos,
   deleteVideoRecord,
+  VIDEO_ENTITY_TYPE,
 } from '../services/dynamoService.js';
 import { sendTranscodeJob } from '../services/sqsService.js';
 import { config } from '../config/aws.js';
@@ -25,6 +30,61 @@ const RequestUploadUrlSchema = z.object({
 const CompleteUploadSchema = z.object({
   videoId: z.string().uuid('VideoId không hợp lệ'),
 });
+
+const VIDEO_STATUSES = ['UPLOADING', 'PROCESSING', 'READY', 'FAILED'];
+
+const ListVideosQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(VIDEO_STATUSES).optional(),
+  nextToken: z.string().max(1024).optional(),
+});
+
+// Khóa phân trang của GSI: chỉ chấp nhận đúng 3 trường, tránh client chèn khóa tùy ý
+const CursorSchema = z
+  .object({
+    videoId: z.string().min(1).max(64),
+    entityType: z.literal(VIDEO_ENTITY_TYPE),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+
+const VideoIdParamSchema = z.object({
+  id: z.string().uuid('VideoId không hợp lệ'),
+});
+
+export function encodeCursor(lastKey) {
+  return lastKey ? Buffer.from(JSON.stringify(lastKey)).toString('base64url') : null;
+}
+
+export function decodeCursor(token) {
+  if (!token) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+  } catch {
+    parsed = null;
+  }
+  const result = CursorSchema.safeParse(parsed);
+  if (!result.success) {
+    const error = new Error('nextToken không hợp lệ');
+    error.status = 400;
+    throw error;
+  }
+  return result.data;
+}
+
+/**
+ * Dữ liệu video trả cho client: bỏ trường nội bộ, thêm URL phát khi video đã READY
+ */
+export function toPublicVideo(video) {
+  const { entityType, ...rest } = video;
+  const ready = video.status === 'READY';
+  return {
+    ...rest,
+    streamingUrl: ready ? `${config.cdnBaseUrl}/${video.videoId}/master.m3u8` : null,
+    thumbnailUrl: ready ? video.thumbnailUrl || `${config.cdnBaseUrl}/${video.videoId}/thumbnail.jpg` : null,
+  };
+}
 
 /**
  * [POST /api/videos/upload-url]
@@ -155,30 +215,23 @@ export async function completeUpload(req, res, next) {
 }
 
 /**
- * [GET /api/videos]
- * Lấy danh sách video
+ * [GET /api/videos?limit=20&status=READY&nextToken=...]
+ * Lấy danh sách video, mới nhất trước, có phân trang
  */
 export async function listVideos(req, res, next) {
   try {
-    const limit = parseInt(req.query.limit || '50', 10);
-    const videos = await getAllVideos(limit);
-
-    // Bổ sung đường dẫn HLS phát video nếu trạng thái READY
-    const formattedVideos = videos.map((v) => {
-      if (v.status === 'READY') {
-        return {
-          ...v,
-          streamingUrl: `${config.cdnBaseUrl}/${v.videoId}/master.m3u8`,
-          thumbnailUrl: v.thumbnailUrl || `${config.cdnBaseUrl}/${v.videoId}/thumbnail.jpg`,
-        };
-      }
-      return v;
+    const { limit, status, nextToken } = ListVideosQuerySchema.parse(req.query);
+    const { items, lastKey } = await queryVideos({
+      limit,
+      status,
+      startKey: decodeCursor(nextToken),
     });
 
     res.status(200).json({
       success: true,
-      count: formattedVideos.length,
-      data: formattedVideos,
+      count: items.length,
+      nextToken: encodeCursor(lastKey),
+      data: items.map(toPublicVideo),
     });
   } catch (error) {
     next(error);
@@ -191,7 +244,7 @@ export async function listVideos(req, res, next) {
  */
 export async function getVideo(req, res, next) {
   try {
-    const { id } = req.params;
+    const { id } = VideoIdParamSchema.parse(req.params);
     const video = await getVideoById(id);
 
     if (!video) {
@@ -201,19 +254,9 @@ export async function getVideo(req, res, next) {
       });
     }
 
-    const responseData = {
-      ...video,
-      streamingUrl:
-        video.status === 'READY' ? `${config.cdnBaseUrl}/${video.videoId}/master.m3u8` : null,
-      thumbnailUrl:
-        video.status === 'READY'
-          ? video.thumbnailUrl || `${config.cdnBaseUrl}/${video.videoId}/thumbnail.jpg`
-          : null,
-    };
-
     res.status(200).json({
       success: true,
-      data: responseData,
+      data: toPublicVideo(video),
     });
   } catch (error) {
     next(error);
@@ -222,11 +265,12 @@ export async function getVideo(req, res, next) {
 
 /**
  * [DELETE /api/videos/:id]
- * Xóa video
+ * Xóa video cùng toàn bộ file gốc và file HLS trên S3.
+ * Không cho xóa khi đang PROCESSING (worker có thể đang ghi file).
  */
 export async function deleteVideo(req, res, next) {
   try {
-    const { id } = req.params;
+    const { id } = VideoIdParamSchema.parse(req.params);
     const existing = await getVideoById(id);
     if (!existing) {
       return res.status(404).json({
@@ -234,12 +278,32 @@ export async function deleteVideo(req, res, next) {
         message: `Video not found with ID: ${id}`,
       });
     }
+    if (existing.status === 'PROCESSING') {
+      return res.status(409).json({
+        success: false,
+        message: 'Video đang được transcode, hãy xóa sau khi xử lý xong',
+        currentStatus: existing.status,
+      });
+    }
 
+    // 1. Đánh dấu DELETING có điều kiện: chặn /complete và worker chen vào trong lúc xóa file.
+    //    Nếu bước 2 lỗi, bản ghi vẫn ở DELETING và client có thể gọi DELETE lại.
+    await updateVideoStatus(id, 'DELETING', {}, { notStatus: 'PROCESSING' });
+
+    // 2. Xóa file gốc và file HLS
+    // Prefix cố định theo cách s3Service sinh key (raw/{videoId}/source.ext), không suy từ dữ liệu
+    const [rawDeleted, processedDeleted] = await Promise.all([
+      deleteS3Prefix(existing.rawBucket || config.rawBucket, `raw/${id}/`),
+      deleteS3Prefix(existing.processedBucket || config.processedBucket, `${id}/`),
+    ]);
+
+    // 3. Xóa bản ghi
     await deleteVideoRecord(id);
 
     res.status(200).json({
       success: true,
       message: `Video ${id} deleted successfully`,
+      data: { deletedObjects: rawDeleted + processedDeleted },
     });
   } catch (error) {
     next(error);
