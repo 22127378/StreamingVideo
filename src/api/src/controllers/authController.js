@@ -24,7 +24,7 @@ export async function issuePlaybackToken(req, res, next) {
       if (video && video.tier === 'premium' && tier !== 'premium') {
         return res.status(403).json({
           success: false,
-          message: 'Video này yêu cầu tài khoản Premium để phát nội dung!',
+          message: 'Video này yêu cầu tài khoản Premium để phát nội dung',
           requiredTier: 'premium',
           userTier: tier,
         });

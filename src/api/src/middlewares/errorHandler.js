@@ -4,7 +4,7 @@ import { ZodError } from 'zod';
  * Middleware bắt lỗi toàn cục
  */
 export function errorHandler(err, req, res, next) {
-  console.error(`❌ [API Error] ${req.method} ${req.originalUrl}:`, err);
+  console.error(`[API Error] ${req.method} ${req.originalUrl}:`, err);
 
   // Xử lý lỗi validation từ Zod
   if (err instanceof ZodError) {

@@ -11,7 +11,7 @@ import { s3Client } from '../config/aws.js';
  * @param {string} localFilePath
  */
 export async function downloadFileFromS3(bucket, key, localFilePath) {
-  console.log(`📥 [S3] Đang tải file s3://${bucket}/${key} về ${localFilePath}...`);
+  console.log(`[S3] Đang tải file s3://${bucket}/${key} về ${localFilePath}...`);
 
   const dir = path.dirname(localFilePath);
   if (!fs.existsSync(dir)) {
@@ -29,7 +29,7 @@ export async function downloadFileFromS3(bucket, key, localFilePath) {
     const writeStream = fs.createWriteStream(localFilePath);
     response.Body.pipe(writeStream)
       .on('finish', () => {
-        console.log(`✅ [S3] Tải xong file: ${localFilePath} (${fs.statSync(localFilePath).size} bytes)`);
+        console.log(`[S3] Tải xong file: ${localFilePath} (${fs.statSync(localFilePath).size} bytes)`);
         resolve(localFilePath);
       })
       .on('error', reject);
@@ -44,7 +44,7 @@ export async function downloadFileFromS3(bucket, key, localFilePath) {
  */
 export async function uploadDirectoryToS3(localDir, bucket, s3Prefix) {
   const files = fs.readdirSync(localDir);
-  console.log(`📤 [S3] Bắt đầu upload ${files.length} files từ ${localDir} lên s3://${bucket}/${s3Prefix}...`);
+  console.log(`[S3] Bắt đầu upload ${files.length} files từ ${localDir} lên s3://${bucket}/${s3Prefix}...`);
 
   const uploadPromises = files.map(async (file) => {
     const fullPath = path.join(localDir, file);
@@ -68,9 +68,8 @@ export async function uploadDirectoryToS3(localDir, bucket, s3Prefix) {
     });
 
     await s3Client.send(command);
-    // console.log(`   ✓ Uploaded: ${s3Key} (${contentType})`);
   });
 
   await Promise.all(uploadPromises);
-  console.log(`✅ [S3] Đã upload toàn bộ ${files.length} files lên s3://${bucket}/${s3Prefix}!`);
+  console.log(`[S3] Đã upload toàn bộ ${files.length} files lên s3://${bucket}/${s3Prefix}`);
 }

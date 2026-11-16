@@ -39,6 +39,6 @@ export async function updateVideoStatus(videoId, status, extraFields = {}) {
     })
   );
 
-  console.log(`🗄️ [DynamoDB] Cập nhật Video ${videoId} -> Status: [${status}]`);
+  console.log(`[DynamoDB] Cập nhật Video ${videoId} -> Status: [${status}]`);
   return response.Attributes;
 }

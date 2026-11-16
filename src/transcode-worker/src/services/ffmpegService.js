@@ -132,7 +132,7 @@ export function transcodeHLSVariant(inputPath, outputDir, profile) {
     const segmentPattern = `${profile.name}_%03d.ts`;
     const outputPath = path.join(outputDir, playlistName);
 
-    console.log(`🎬 [FFmpeg] Bắt đầu transcode profile: ${profile.name} (${profile.width}x${profile.height})...`);
+    console.log(`[FFmpeg] Bắt đầu transcode profile: ${profile.name} (${profile.width}x${profile.height})...`);
 
     ffmpeg(inputPath)
       // Video codec H.264 & Audio codec AAC
@@ -163,7 +163,7 @@ export function transcodeHLSVariant(inputPath, outputDir, profile) {
         }
       })
       .on('end', () => {
-        console.log(`\n✅ [FFmpeg] Hoàn thành profile ${profile.name}!`);
+        console.log(`\n[FFmpeg] Hoàn thành profile ${profile.name}`);
         resolve({
           name: profile.name,
           playlist: playlistName,
@@ -171,7 +171,7 @@ export function transcodeHLSVariant(inputPath, outputDir, profile) {
         });
       })
       .on('error', (err) => {
-        console.error(`\n❌ [FFmpeg] Lỗi khi transcode ${profile.name}:`, err.message);
+        console.error(`\n[FFmpeg] Lỗi khi transcode ${profile.name}:`, err.message);
         reject(err);
       })
       .run();

@@ -30,7 +30,7 @@ export async function processTranscodeMessage(message) {
   try {
     jobData = JSON.parse(message.Body);
   } catch (err) {
-    console.error('❌ [SQS] JSON body không hợp lệ:', message.Body);
+    console.error('[SQS] JSON body không hợp lệ:', message.Body);
     return;
   }
 
@@ -41,11 +41,8 @@ export async function processTranscodeMessage(message) {
     processedBucket = config.processedBucket,
     targetResolutions = ['1080p', '720p', '480p', '360p'],
   } = jobData;
-
-  console.log(`\n======================================================`);
-  console.log(`🚀 [Worker] Bắt đầu xử lý Job cho Video: ${videoId}`);
-  console.log(`📦 Nguồn: s3://${rawBucket}/${rawS3Key}`);
-  console.log(`======================================================`);
+  console.log(`[Worker] Bắt đầu xử lý Job cho Video: ${videoId}`);
+  console.log(`[Worker] Nguồn: s3://${rawBucket}/${rawS3Key}`);
 
   const videoWorkDir = path.join(TEMP_ROOT, videoId);
   const rawLocalPath = path.join(videoWorkDir, 'raw', path.basename(rawS3Key));
@@ -62,12 +59,12 @@ export async function processTranscodeMessage(message) {
     await downloadFileFromS3(rawBucket, rawS3Key, rawLocalPath);
 
     // 3. Phân tích thông số video (ffprobe)
-    console.log('🔍 [Worker] Đang phân tích thông số video gốc...');
+    console.log('[Worker] Đang phân tích thông số video gốc...');
     const meta = await probeVideo(rawLocalPath);
-    console.log(`📊 Video gốc: ${meta.width}x${meta.height}, thời lượng: ${meta.duration}s, codec: ${meta.codec}`);
+    console.log(`Video gốc: ${meta.width}x${meta.height}, thời lượng: ${meta.duration}s, codec: ${meta.codec}`);
 
     // 4. Tạo ảnh Thumbnail JPG tại 2s
-    console.log('📸 [Worker] Đang trích xuất Thumbnail...');
+    console.log('[Worker] Đang trích xuất Thumbnail...');
     const thumbnailTime = meta.duration > 2 ? 2 : meta.duration / 2;
     await generateThumbnail(rawLocalPath, hlsOutputDir, thumbnailTime);
 
@@ -78,7 +75,7 @@ export async function processTranscodeMessage(message) {
       .filter((p) => meta.height >= p.height * 0.8 || p.name === '360p'); // Luôn có ít nhất 1 profile cơ bản
 
     const selectedProfiles = validProfiles.length > 0 ? validProfiles : [HLS_PROFILES['360p']];
-    console.log(`🎯 Các biến thể sẽ transcode: ${selectedProfiles.map((p) => p.name).join(', ')}`);
+    console.log(`Các biến thể sẽ transcode: ${selectedProfiles.map((p) => p.name).join(', ')}`);
 
     // 6. Transcode từng biến thể HLS
     const successfulVariants = [];
@@ -88,7 +85,7 @@ export async function processTranscodeMessage(message) {
     }
 
     // 7. Tạo Master Playlist (master.m3u8)
-    console.log('📝 [Worker] Đang tạo master.m3u8...');
+    console.log('[Worker] Đang tạo master.m3u8...');
     createMasterPlaylist(successfulVariants, hlsOutputDir);
 
     // 8. Upload toàn bộ thư mục HLS lên S3 Processed Bucket
@@ -118,10 +115,10 @@ export async function processTranscodeMessage(message) {
         ReceiptHandle: message.ReceiptHandle,
       })
     );
-    console.log(`🧹 [SQS] Đã xóa message thành công khỏi queue.`);
-    console.log(`🎉 [Worker] Hoàn tất xử lý video: ${videoId}!\n`);
+    console.log(`[SQS] Đã xóa message thành công khỏi queue.`);
+    console.log(`[Worker] Hoàn tất xử lý video: ${videoId}`);
   } catch (error) {
-    console.error(`💥 [Worker] Xử lý video ${videoId} thất bại:`, error);
+    console.error(`[Worker] Xử lý video ${videoId} thất bại:`, error);
     // Cập nhật DynamoDB FAILED
     await updateVideoStatus(videoId, 'FAILED', {
       errorMessage: error.message || 'Unknown transcoding error',
@@ -133,10 +130,9 @@ export async function processTranscodeMessage(message) {
     try {
       if (fs.existsSync(videoWorkDir)) {
         fs.rmSync(videoWorkDir, { recursive: true, force: true });
-        // console.log(`🧹 [Disk] Đã dọn dẹp thư mục tạm ${videoWorkDir}`);
       }
     } catch (cleanupErr) {
-      console.warn(`⚠️ [Disk] Không thể xóa thư mục tạm:`, cleanupErr.message);
+      console.warn(`[Disk] Không thể xóa thư mục tạm:`, cleanupErr.message);
     }
   }
 }
@@ -145,7 +141,7 @@ export async function processTranscodeMessage(message) {
  * Vòng lặp lắng nghe tin nhắn từ SQS (Long Polling Loop)
  */
 export async function startSQSConsumer(isRunningSignal = { value: true }) {
-  console.log(`🎧 [Worker] Đang lắng nghe hàng đợi SQS: ${config.transcodeQueueUrl}`);
+  console.log(`[Worker] Đang lắng nghe hàng đợi SQS: ${config.transcodeQueueUrl}`);
 
   while (isRunningSignal.value) {
     try {
@@ -172,7 +168,7 @@ export async function startSQSConsumer(isRunningSignal = { value: true }) {
     } catch (pollError) {
       // Khi LocalStack chưa bật hoặc mạng ngắt kết nối
       if (isRunningSignal.value) {
-        // console.warn(`⚠️ [SQS Polling] Đang chờ kết nối tới SQS (${pollError.message}). Thử lại sau 5s...`);
+        // console.warn(`[SQS Polling] Đang chờ kết nối tới SQS (${pollError.message}). Thử lại sau 5s...`);
         await new Promise((r) => setTimeout(r, 5000));
       }
     }
