@@ -1,0 +1,3 @@
+# Copy thành terraform.tfvars (đã gitignore) rồi điền email nhận cảnh báo chi phí
+budget_alert_emails = ["you@example.com"]
+budget_limit_usd    = 20
