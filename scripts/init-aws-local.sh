@@ -28,11 +28,13 @@ DLQ_ARN=$(awslocal sqs get-queue-attributes --queue-url ${DLQ_URL} --attribute-n
 
 echo "DLQ created: ${DLQ_ARN}"
 
-REDRIVE_POLICY="{\"deadLetterTargetArn\":\"${DLQ_ARN}\",\"maxReceiveCount\":\"3\"}"
+# RedrivePolicy là một chuỗi JSON lồng trong JSON. Image LocalStack không có jq nên escape thủ công.
+# maxReceiveCount phải khớp SQS_MAX_RECEIVE_COUNT của worker.
+QUEUE_ATTRIBUTES=$(printf '{"RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"3\\"}","VisibilityTimeout":"300"}' "${DLQ_ARN}")
 awslocal sqs create-queue \
   --queue-name ${QUEUE_NAME} \
-  --attributes "{\"RedrivePolicy\":$(echo $REDRIVE_POLICY | jq -R .),\"VisibilityTimeout\":\"300\"}" \
-  --region ${AWS_REGION} || true
+  --attributes "${QUEUE_ATTRIBUTES}" \
+  --region ${AWS_REGION}
 
 echo "Main SQS Queue created: ${QUEUE_NAME}"
 
