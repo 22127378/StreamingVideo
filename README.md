@@ -98,34 +98,23 @@ In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally
 | Monitoring and scanning | Prometheus, Trivy |
 | Security | GitHub OIDC, IRSA, CloudFront signed cookies, KMS |
 
-## Infrastructure (planned)
+## Infrastructure
 
-Terraform is split into 10 modules applied in 5 layers:
+Terraform lives in `terraform/`, split into layers that are applied separately. See `terraform/README.md` for the apply order and how to run the services locally against real AWS.
 
-```
-terraform/
-├── Layer 1 — Networking
-│   ├── module: vpc           # VPC, subnets, NAT gateway, route tables
-│   └── module: security      # Security groups, NACLs
-│
-├── Layer 2 — Compute
-│   ├── module: eks           # EKS cluster, node groups (on-demand + spot)
-│   └── module: keda          # KEDA operator for queue-based autoscaling
-│
-├── Layer 3 — Storage & Data
-│   ├── module: s3            # Video upload bucket, processed output bucket
-│   ├── module: dynamodb      # Video metadata, user sessions
-│   └── module: cloudfront    # CDN distribution with signed cookies
-│
-├── Layer 4 — Messaging & Events
-│   ├── module: eventbridge   # S3 event rules
-│   └── module: sqs           # Processing queue + Dead Letter Queue
-│
-└── Layer 5 — State & Security
-    └── module: backend       # S3 backend + KMS encryption for state
-```
+| Layer | Status | Contents |
+| --- | --- | --- |
+| backend | Built | State bucket (versioned, KMS-encrypted, TLS only), AWS Budget alarm |
+| storage | Built | Raw and processed S3 buckets, DynamoDB `videos` table with its GSI |
+| messaging | Built | Transcode SQS queue and DLQ |
+| identity | Built | Least-privilege IAM policies for the API and worker, plus dev roles |
+| networking | Planned | VPC, subnets, NAT gateway, security groups |
+| compute | Planned | EKS with on-demand and Spot node groups, KEDA, IRSA roles using the identity policies |
+| delivery | Planned | CloudFront with signed cookies in front of the processed bucket and the ALB |
 
-Terraform state lives in S3, encrypted with KMS, with a DynamoDB table for state locking. The storage and messaging layers cost almost nothing when idle. The compute layer does not: EKS charges for its control plane by the hour and the NAT gateway has an hourly charge too, so apply that layer when you need it and destroy it afterwards.
+EventBridge is left out for now. The API already queues a job when the client calls `/api/videos/complete`, so adding an S3 → EventBridge → SQS rule on top would transcode every video twice.
+
+Terraform state lives in S3, encrypted with KMS, and is locked with S3 lockfiles (Terraform 1.10+) instead of a DynamoDB table. The storage and messaging layers cost almost nothing when idle. The compute layer does not: EKS charges for its control plane by the hour and the NAT gateway has an hourly charge too, so apply that layer when you need it and destroy it afterwards.
 
 ## Transcode pipeline
 
@@ -231,13 +220,13 @@ streamforge/
 │   ├── api/                      # REST API
 │   ├── transcode-worker/         # FFmpeg transcoding worker
 │   └── frontend/                 # Video player and UI (not built yet)
-├── .github/workflows/ci.yml      # Tests, image build, Trivy scan
+├── .github/workflows/ci.yml      # Tests, image build, Trivy scan, Terraform checks
+├── terraform/
+│   ├── modules/                  # backend, budget, s3, sqs, dynamodb, app-iam
+│   └── layers/                   # backend, storage, messaging, identity
 │
 │   Planned:
-├── terraform/
-│   ├── modules/                  # vpc, security, eks, keda, s3, dynamodb,
-│   │                             # cloudfront, eventbridge, sqs, backend
-│   └── layers/                   # networking, compute, storage, messaging, backend
+├── terraform/layers/             # networking, compute, delivery
 ├── k8s/                          # deployments, services, keda, rollouts
 └── .github/workflows/cd.yml      # Push to ECR via OIDC, update the config repo
 ```
