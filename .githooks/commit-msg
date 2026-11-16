@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Kiểm tra dòng đầu commit message theo quy ước: [NAMESPACE] Mô tả ngắn
+# Bật hook: git config core.hooksPath .githooks
+
+msg_file="$1"
+subject=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n1)
+
+# Bỏ qua commit do git tự sinh
+if [[ "$subject" =~ ^(Merge|Revert|fixup!|squash!|amend!) ]]; then
+  exit 0
+fi
+
+namespaces="ADD|FEATURE|DELETE|REFACTOR|FIX|DOCS|TEST|CONFIG|STYLE|PERF|BUILD|CI"
+fail() {
+  echo "commit-msg: $1" >&2
+  echo "  Dòng hiện tại: $subject" >&2
+  echo "  Định dạng đúng: [NAMESPACE] Short, clear description" >&2
+  echo "  NAMESPACE: ${namespaces//|/, }" >&2
+  exit 1
+}
+
+if ! [[ "$subject" =~ ^\[($namespaces)\]\ [^[:space:]] ]]; then
+  fail "thiếu hoặc sai namespace."
+fi
+
+description="${subject#*] }"
+
+if (( ${#subject} > 72 )); then
+  fail "dòng đầu dài ${#subject} ký tự, tối đa 72."
+fi
+
+if (( ${#description} < 10 )); then
+  fail "mô tả quá ngắn, hãy nói rõ thay đổi gì."
+fi
+
+shopt -s nocasematch
+if [[ "$description" =~ ^(fix(ed)?\ bugs?|update(d)?\ code|changes?|wip|misc|minor\ (fix|changes?)|update)\.?$ ]]; then
+  fail "mô tả quá chung chung."
+fi
+if [[ "$description" =~ \.$ ]]; then
+  fail "không kết thúc dòng đầu bằng dấu chấm."
+fi
+
+exit 0
