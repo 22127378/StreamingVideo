@@ -14,12 +14,41 @@ import {
   generateThumbnail,
   transcodeHLSVariant,
   createMasterPlaylist,
-  HLS_PROFILES,
+  selectProfiles,
 } from './ffmpegService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TEMP_ROOT = path.resolve(__dirname, '../../temp');
+
+/**
+ * Định kỳ gia hạn visibility timeout của message trong lúc đang transcode,
+ * tránh message hiện lại trên queue và bị worker khác xử lý trùng với video dài.
+ * @param {string} receiptHandle
+ * @returns {() => void} Hàm dừng heartbeat
+ */
+export function startVisibilityHeartbeat(receiptHandle, {
+  intervalSeconds = config.heartbeatIntervalSeconds,
+  visibilityTimeout = config.visibilityTimeout,
+  client = sqsClient,
+} = {}) {
+  const timer = setInterval(async () => {
+    try {
+      await client.send(
+        new ChangeMessageVisibilityCommand({
+          QueueUrl: config.transcodeQueueUrl,
+          ReceiptHandle: receiptHandle,
+          VisibilityTimeout: visibilityTimeout,
+        })
+      );
+      console.log(`\n[SQS] Gia hạn visibility thêm ${visibilityTimeout}s`);
+    } catch (err) {
+      console.warn(`\n[SQS] Không gia hạn được visibility:`, err.message);
+    }
+  }, intervalSeconds * 1000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
 
 /**
  * Xử lý một Transcode Job đơn lẻ
@@ -51,6 +80,8 @@ export async function processTranscodeMessage(message) {
   fs.mkdirSync(path.dirname(rawLocalPath), { recursive: true });
   fs.mkdirSync(hlsOutputDir, { recursive: true });
 
+  const stopHeartbeat = startVisibilityHeartbeat(message.ReceiptHandle);
+
   try {
     // 1. Cập nhật DynamoDB sang PROCESSING
     await updateVideoStatus(videoId, 'PROCESSING');
@@ -68,19 +99,14 @@ export async function processTranscodeMessage(message) {
     const thumbnailTime = meta.duration > 2 ? 2 : meta.duration / 2;
     await generateThumbnail(rawLocalPath, hlsOutputDir, thumbnailTime);
 
-    // 5. Chọn lọc các profiles độ phân giải phù hợp (không upscale)
-    const validProfiles = targetResolutions
-      .filter((res) => HLS_PROFILES[res])
-      .map((res) => HLS_PROFILES[res])
-      .filter((p) => meta.height >= p.height * 0.8 || p.name === '360p'); // Luôn có ít nhất 1 profile cơ bản
-
-    const selectedProfiles = validProfiles.length > 0 ? validProfiles : [HLS_PROFILES['360p']];
+    // 5. Chọn các profile phù hợp theo cạnh ngắn (không upscale, hỗ trợ video dọc)
+    const selectedProfiles = selectProfiles(meta, targetResolutions);
     console.log(`Các biến thể sẽ transcode: ${selectedProfiles.map((p) => p.name).join(', ')}`);
 
     // 6. Transcode từng biến thể HLS
     const successfulVariants = [];
     for (const profile of selectedProfiles) {
-      const variantResult = await transcodeHLSVariant(rawLocalPath, hlsOutputDir, profile);
+      const variantResult = await transcodeHLSVariant(rawLocalPath, hlsOutputDir, profile, meta);
       successfulVariants.push(variantResult);
     }
 
@@ -94,8 +120,8 @@ export async function processTranscodeMessage(message) {
     // 9. Cập nhật DynamoDB sang READY
     const qualities = successfulVariants.map((v) => ({
       resolution: v.profile.name,
-      width: v.profile.width,
-      height: v.profile.height,
+      width: v.width,
+      height: v.height,
       bitrate: v.profile.videoBitrate,
       playlistUrl: `${config.cdnBaseUrl}/${videoId}/${v.playlist}`,
     }));
@@ -126,6 +152,7 @@ export async function processTranscodeMessage(message) {
     // Không xóa message để SQS tự retry hoặc đưa vào DLQ
     throw error;
   } finally {
+    stopHeartbeat();
     // Dọn dẹp thư mục tạm trên ổ cứng
     try {
       if (fs.existsSync(videoWorkDir)) {
@@ -168,7 +195,7 @@ export async function startSQSConsumer(isRunningSignal = { value: true }) {
     } catch (pollError) {
       // Khi LocalStack chưa bật hoặc mạng ngắt kết nối
       if (isRunningSignal.value) {
-        // console.warn(`[SQS Polling] Đang chờ kết nối tới SQS (${pollError.message}). Thử lại sau 5s...`);
+        console.warn(`[SQS Polling] Đang chờ kết nối tới SQS (${pollError.message}). Thử lại sau 5s...`);
         await new Promise((r) => setTimeout(r, 5000));
       }
     }

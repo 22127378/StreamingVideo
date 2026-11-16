@@ -56,4 +56,6 @@ export const config = {
   pollingWaitTimeSeconds: parseInt(process.env.SQS_POLLING_WAIT_TIME || '10', 10),
   maxNumberOfMessages: parseInt(process.env.SQS_MAX_MESSAGES || '1', 10),
   visibilityTimeout: parseInt(process.env.SQS_VISIBILITY_TIMEOUT || '300', 10),
+  // Gia hạn visibility định kỳ khi đang transcode (phải nhỏ hơn visibilityTimeout)
+  heartbeatIntervalSeconds: parseInt(process.env.SQS_HEARTBEAT_INTERVAL || '120', 10),
 };

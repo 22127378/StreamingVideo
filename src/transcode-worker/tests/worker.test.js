@@ -6,6 +6,9 @@ import os from 'os';
 import {
   HLS_PROFILES,
   createMasterPlaylist,
+  computeOutputSize,
+  selectProfiles,
+  parseFrameRate,
 } from '../src/services/ffmpegService.js';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
@@ -65,6 +68,53 @@ test('StreamForge Transcode Worker Unit Tests', async (t) => {
     assert.ok(content.includes('360p.m3u8'));
 
     // Cleanup
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test('4. computeOutputSize keeps aspect ratio and never upscales', () => {
+    // 16:9 ngang
+    assert.deepStrictEqual(computeOutputSize({ width: 1920, height: 1080 }, HLS_PROFILES['720p']), { width: 1280, height: 720 });
+    // 4:3
+    assert.deepStrictEqual(computeOutputSize({ width: 1440, height: 1080 }, HLS_PROFILES['720p']), { width: 960, height: 720 });
+    // Video dọc 9:16: cạnh ngắn (width) = 720
+    assert.deepStrictEqual(computeOutputSize({ width: 1080, height: 1920 }, HLS_PROFILES['720p']), { width: 720, height: 1280 });
+    // Nguồn nhỏ hơn profile -> giữ nguyên, không upscale
+    assert.deepStrictEqual(computeOutputSize({ width: 640, height: 360 }, HLS_PROFILES['1080p']), { width: 640, height: 360 });
+    // Luôn ra số chẵn (yêu cầu của libx264)
+    const odd = computeOutputSize({ width: 1918, height: 1078 }, HLS_PROFILES['480p']);
+    assert.strictEqual(odd.width % 2, 0);
+    assert.strictEqual(odd.height % 2, 0);
+  });
+
+  await t.test('5. selectProfiles compares on short side and dedupes', () => {
+    const all = ['1080p', '720p', '480p', '360p'];
+    const names = (meta) => selectProfiles(meta, all).map((p) => p.name);
+
+    assert.deepStrictEqual(names({ width: 1920, height: 1080 }), all);
+    // Video dọc 1080x1920 phải có đủ 4 profile (trước đây so theo height nên sai)
+    assert.deepStrictEqual(names({ width: 1080, height: 1920 }), all);
+    assert.deepStrictEqual(names({ width: 1280, height: 720 }), ['720p', '480p', '360p']);
+    // Nguồn nhỏ hơn 360p: chỉ giữ 1 profile thấp nhất
+    assert.deepStrictEqual(names({ width: 426, height: 240 }), ['360p']);
+    // Danh sách yêu cầu rỗng/không hợp lệ -> fallback 360p
+    assert.deepStrictEqual(selectProfiles({ width: 1920, height: 1080 }, ['4k']).map((p) => p.name), ['360p']);
+  });
+
+  await t.test('6. parseFrameRate handles ffprobe fractions', () => {
+    assert.strictEqual(parseFrameRate('25/1'), 25);
+    assert.ok(Math.abs(parseFrameRate('30000/1001') - 29.97) < 0.01);
+    assert.strictEqual(parseFrameRate('0/0'), null);
+    assert.strictEqual(parseFrameRate(undefined), null);
+  });
+
+  await t.test('7. Master playlist uses actual variant resolution', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streamforge-test-'));
+    const masterPath = createMasterPlaylist(
+      [{ playlist: '720p.m3u8', profile: HLS_PROFILES['720p'], width: 720, height: 1280 }],
+      tempDir
+    );
+    const content = fs.readFileSync(masterPath, 'utf-8');
+    assert.ok(content.includes('RESOLUTION=720x1280'));
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
