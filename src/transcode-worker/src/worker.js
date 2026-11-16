@@ -1,28 +1,44 @@
 import { startSQSConsumer } from './services/sqsConsumer.js';
 import { config } from './config/aws.js';
+
 console.log('StreamForge Transcode Worker Service Started');
 console.log(`SQS Queue: ${config.transcodeQueueUrl}`);
 console.log(`S3 Raw Bucket: ${config.rawBucket}`);
 console.log(`S3 Processed Bucket: ${config.processedBucket}`);
 console.log(`DynamoDB Table: ${config.videosTable}`);
 
-const runningSignal = { value: true };
+// stopController: ngừng nhận message mới. jobController: hủy job đang chạy.
+const stopController = new AbortController();
+const jobController = new AbortController();
 
-// Xử lý Graceful Shutdown
+// Graceful shutdown: ngừng poll ngay, cho job hiện tại thời gian để xong.
+// Hết thời gian chờ (hoặc nhận tín hiệu lần hai) thì hủy job và trả message về queue.
 const handleShutdown = (signal) => {
-  console.log(`\nNhận tín hiệu ${signal}. Đang dừng Worker...`);
-  runningSignal.value = false;
+  if (stopController.signal.aborted) {
+    console.log(`\nNhận ${signal} lần hai. Hủy job đang chạy...`);
+    jobController.abort(new Error(`Worker shutdown (${signal})`));
+    return;
+  }
+
+  console.log(`\nNhận tín hiệu ${signal}. Ngừng nhận job mới, chờ job hiện tại tối đa ${config.shutdownGraceSeconds}s...`);
+  stopController.abort(new Error(`Worker shutdown (${signal})`));
   setTimeout(() => {
-    console.log('Worker đã dừng an toàn.');
-    process.exit(0);
-  }, 1000);
+    if (!jobController.signal.aborted) {
+      console.log('Hết thời gian chờ. Hủy job đang chạy...');
+      jobController.abort(new Error('Worker shutdown timeout'));
+    }
+  }, config.shutdownGraceSeconds * 1000).unref();
 };
 
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
-// Bắt đầu vòng lặp tiêu thụ message
-startSQSConsumer(runningSignal).catch((err) => {
-  console.error('[Fatal Error] Worker gặp sự cố nghiêm trọng:', err);
-  process.exit(1);
-});
+startSQSConsumer({ stopSignal: stopController.signal, jobSignal: jobController.signal })
+  .then(() => {
+    console.log('Worker đã dừng an toàn.');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('[Fatal Error] Worker gặp sự cố nghiêm trọng:', err);
+    process.exit(1);
+  });

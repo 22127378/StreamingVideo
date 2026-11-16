@@ -10,6 +10,8 @@ import {
   selectProfiles,
   parseFrameRate,
 } from '../src/services/ffmpegService.js';
+import { planFailure } from '../src/services/sqsConsumer.js';
+import { forEachLimit } from '../src/services/s3Service.js';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
@@ -116,5 +118,30 @@ test('StreamForge Transcode Worker Unit Tests', async (t) => {
     const content = fs.readFileSync(masterPath, 'utf-8');
     assert.ok(content.includes('RESOLUTION=720x1280'));
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await t.test('8. planFailure retries with backoff, then marks final attempt', () => {
+    const opts = { maxReceiveCount: 3, retryDelaySeconds: 30 };
+    assert.deepStrictEqual(planFailure(1, opts), { final: false, retryInSeconds: 30 });
+    assert.deepStrictEqual(planFailure(2, opts), { final: false, retryInSeconds: 60 });
+    assert.deepStrictEqual(planFailure(3, opts), { final: true, retryInSeconds: 0 });
+    assert.deepStrictEqual(planFailure(NaN, opts), { final: false, retryInSeconds: 30 });
+    // Không vượt quá giới hạn 12 giờ của SQS
+    assert.strictEqual(planFailure(5, { maxReceiveCount: 10, retryDelaySeconds: 20000 }).retryInSeconds, 43200);
+  });
+
+  await t.test('9. forEachLimit never exceeds the concurrency limit', async () => {
+    let running = 0;
+    let peak = 0;
+    const done = [];
+    await forEachLimit([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      done.push(n);
+      running--;
+    });
+    assert.strictEqual(peak, 3);
+    assert.deepStrictEqual(done.sort(), [1, 2, 3, 4, 5, 6, 7]);
   });
 });

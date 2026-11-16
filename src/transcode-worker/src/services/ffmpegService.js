@@ -207,10 +207,16 @@ export function generateThumbnail(inputPath, outputDir, timestampSeconds = 2) {
  * @param {string} outputDir Thư mục đích
  * @param {Object} profile Cấu hình profile (1080p, 720p...)
  * @param {{ width: number, height: number, fps: number }} meta Thông số video gốc (từ probeVideo)
+ * @param {{ signal?: AbortSignal }} options Khi signal bị abort, tiến trình ffmpeg bị kill ngay
  * @returns {Promise<{ name: string, playlist: string, profile: Object, width: number, height: number }>}
  */
-export function transcodeHLSVariant(inputPath, outputDir, profile, meta) {
+export function transcodeHLSVariant(inputPath, outputDir, profile, meta, { signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+
     const playlistName = `${profile.name}.m3u8`;
     const segmentPattern = `${profile.name}_%03d.ts`;
     const outputPath = path.join(outputDir, playlistName);
@@ -221,7 +227,7 @@ export function transcodeHLSVariant(inputPath, outputDir, profile, meta) {
 
     console.log(`[FFmpeg] Bắt đầu transcode profile: ${profile.name} (${width}x${height}, GOP ${gop})...`);
 
-    ffmpeg(inputPath)
+    const command = ffmpeg(inputPath)
       // Video codec H.264 & Audio codec AAC
       .videoCodec('libx264')
       .audioCodec('aac')
@@ -245,10 +251,11 @@ export function transcodeHLSVariant(inputPath, outputDir, profile, meta) {
       .output(outputPath)
       .on('progress', (progress) => {
         if (progress.percent) {
-          process.stdout.write(`⏳ [${profile.name}] ${Math.round(progress.percent)}% `);
+          process.stdout.write(`[${profile.name}] ${Math.round(progress.percent)}% `);
         }
       })
       .on('end', () => {
+        signal?.removeEventListener('abort', onAbort);
         console.log(`\n[FFmpeg] Hoàn thành profile ${profile.name}`);
         resolve({
           name: profile.name,
@@ -259,10 +266,19 @@ export function transcodeHLSVariant(inputPath, outputDir, profile, meta) {
         });
       })
       .on('error', (err) => {
+        signal?.removeEventListener('abort', onAbort);
+        if (signal?.aborted) {
+          console.warn(`\n[FFmpeg] Đã dừng transcode ${profile.name} do worker tắt`);
+          reject(signal.reason);
+          return;
+        }
         console.error(`\n[FFmpeg] Lỗi khi transcode ${profile.name}:`, err.message);
         reject(err);
-      })
-      .run();
+      });
+
+    const onAbort = () => command.kill('SIGKILL');
+    signal?.addEventListener('abort', onAbort, { once: true });
+    command.run();
   });
 }
 

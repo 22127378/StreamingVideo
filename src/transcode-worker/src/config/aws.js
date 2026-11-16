@@ -58,4 +58,11 @@ export const config = {
   visibilityTimeout: parseInt(process.env.SQS_VISIBILITY_TIMEOUT || '300', 10),
   // Gia hạn visibility định kỳ khi đang transcode (phải nhỏ hơn visibilityTimeout)
   heartbeatIntervalSeconds: parseInt(process.env.SQS_HEARTBEAT_INTERVAL || '120', 10),
+  // Phải khớp maxReceiveCount trong redrive policy của queue (scripts/init-aws-local.sh)
+  maxReceiveCount: parseInt(process.env.SQS_MAX_RECEIVE_COUNT || '3', 10),
+  // Lần thử thứ n sẽ chờ n * retryDelaySeconds trước khi message hiện lại
+  retryDelaySeconds: parseInt(process.env.SQS_RETRY_DELAY || '30', 10),
+  // Khi nhận SIGTERM, chờ job hiện tại tối đa chừng này giây rồi trả message về queue
+  shutdownGraceSeconds: parseInt(process.env.SHUTDOWN_GRACE_SECONDS || '25', 10),
+  uploadConcurrency: parseInt(process.env.S3_UPLOAD_CONCURRENCY || '8', 10),
 };
