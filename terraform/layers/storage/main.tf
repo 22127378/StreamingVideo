@@ -43,6 +43,9 @@ module "processed_bucket" {
   bucket_name   = "${local.name_prefix}-processed-${local.account_id}"
   force_destroy = var.allow_destroy_with_data
 
+  # Người xem tải HLS qua CloudFront (layer delivery), bucket vẫn private
+  allow_cloudfront_read = true
+
   # Player đọc playlist và segment (khi đi qua CloudFront thì CloudFront chuyển tiếp header CORS)
   cors_rules = [{
     allowed_methods = ["GET", "HEAD"]

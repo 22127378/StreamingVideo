@@ -93,7 +93,29 @@ data "aws_iam_policy_document" "tls_only" {
       values   = ["false"]
     }
   }
+
+  # CloudFront (Origin Access Control) đọc object. Giới hạn theo account thay vì ARN distribution
+  # để layer storage không phụ thuộc vòng vào layer delivery.
+  dynamic "statement" {
+    for_each = var.allow_cloudfront_read ? [1] : []
+    content {
+      sid       = "AllowCloudFrontRead"
+      actions   = ["s3:GetObject"]
+      resources = ["${aws_s3_bucket.this.arn}/*"]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
 }
+
+data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.this.id

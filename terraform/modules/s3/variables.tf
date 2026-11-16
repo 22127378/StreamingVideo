@@ -21,6 +21,12 @@ variable "expire_prefix" {
   default     = ""
 }
 
+variable "allow_cloudfront_read" {
+  description = "Allow CloudFront distributions in this account (Origin Access Control) to read objects"
+  type        = bool
+  default     = false
+}
+
 variable "cors_rules" {
   description = "CORS rules for browser access"
   type = list(object({
