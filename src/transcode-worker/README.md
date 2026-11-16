@@ -49,3 +49,6 @@ Các biến môi trường riêng của worker, đều không bắt buộc:
 | `SQS_RETRY_DELAY` | 30 | Lần thử thứ n chờ n lần số giây này |
 | `SHUTDOWN_GRACE_SECONDS` | 25 | Thời gian chờ job hiện tại khi tắt worker |
 | `S3_UPLOAD_CONCURRENCY` | 8 | Số file upload song song |
+| `FFMPEG_PATH`, `FFPROBE_PATH` | (trống) | Đường dẫn binary. Docker image đặt sẵn `/usr/bin/ffmpeg` của Debian |
+
+Khi không đặt `FFMPEG_PATH`/`FFPROBE_PATH`, worker dùng binary trong package `@ffmpeg-installer` (optionalDependencies, chỉ để dev trên máy cho tiện), không có thì tìm `ffmpeg` trong `PATH`. Bản ffmpeg đi kèm package này đã cũ và ffprobe của nó từng bị segfault khi đọc file `.ts`, nên nếu máy đã cài ffmpeg thì nên đặt hai biến này.

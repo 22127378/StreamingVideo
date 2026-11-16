@@ -2,7 +2,7 @@
 
 A video streaming platform on AWS EKS. Personal project, June to August 2026.
 
-Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. The design aims for near-zero idle cost (transcode workers scale to zero on an empty queue and run on Spot), GitOps delivery with ArgoCD, and no long-lived AWS keys anywhere.
+Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. Transcode workers scale to zero on an empty queue and run on Spot, delivery is GitOps with ArgoCD, and there are no long-lived AWS keys anywhere. The EKS control plane and NAT gateway still cost roughly $105 a month while the cluster exists, so the cluster is meant to be created for demos and destroyed afterwards.
 
 ## Current state
 
@@ -11,16 +11,25 @@ What exists in this repo today:
 - A local AWS stack on LocalStack (S3, SQS with a dead letter queue, DynamoDB), started with Docker Compose.
 - `src/api`: an Express REST API that issues S3 presigned upload URLs, tracks video metadata in DynamoDB, queues transcode jobs on SQS, and issues JWT playback tokens for free and premium tiers.
 - `src/transcode-worker`: an SQS consumer that downloads the source video, probes it, generates a thumbnail, transcodes up to four HLS renditions (1080p, 720p, 480p, 360p), writes a master playlist, uploads everything to the processed bucket and marks the video `READY`.
+- Dockerfiles for both services in `docker/`, and a GitHub Actions workflow that runs the tests, builds both images and fails on fixable HIGH or CRITICAL vulnerabilities reported by Trivy.
 
-Not built yet: the frontend, the Terraform modules, Kubernetes manifests, Dockerfiles and the CI/CD pipeline. The sections below describe the target design for those parts.
+Not built yet: the frontend, the Terraform modules, Kubernetes manifests and the deploy half of CI/CD. The sections below describe the target design for those parts.
 
 ## Running locally
 
-Requirements: Docker, Node.js 20 or newer, and optionally the AWS CLI for the verify script.
+Requirements: Docker. Node.js 20 or newer if you run the services outside Docker, and optionally the AWS CLI for the verify script.
+
+Everything in Docker:
+
+```bash
+docker compose --profile app up -d --build    # LocalStack, API on http://localhost:4000, worker
+```
+
+Or LocalStack in Docker and the services with npm, which reloads on code changes:
 
 ```bash
 cp .env.example .env
-docker compose up -d                # LocalStack; buckets, queues and table are created on startup
+docker compose up -d                # LocalStack only; buckets, queues and table are created on startup
 ./scripts/verify-local.sh           # or scripts/verify-local.ps1 on Windows
 
 cd src/api && npm install && npm run dev                 # http://localhost:4000
@@ -28,6 +37,8 @@ cd src/transcode-worker && npm install && npm run dev    # in a second terminal
 ```
 
 `src/api/api.http` has sample requests for the full flow: request an upload URL, PUT the file to it, call `/api/videos/complete`, then poll `/api/videos/:id` until the status is `READY`.
+
+LocalStack is pinned to 4.4 because later images refuse to start without a `LOCALSTACK_AUTH_TOKEN`. If `.localstack/` holds a table from an older version of the init script, delete that directory before starting (some files in it are owned by root).
 
 ## Architecture
 
@@ -114,7 +125,7 @@ terraform/
     └── module: backend       # S3 backend + KMS encryption for state
 ```
 
-Terraform state lives in S3, encrypted with KMS, with a DynamoDB table for state locking. Compute is meant to scale down to nothing when idle, so the standing cost is mostly storage.
+Terraform state lives in S3, encrypted with KMS, with a DynamoDB table for state locking. The storage and messaging layers cost almost nothing when idle. The compute layer does not: EKS charges for its control plane by the hour and the NAT gateway has an hourly charge too, so apply that layer when you need it and destroy it afterwards.
 
 ## Transcode pipeline
 
@@ -212,12 +223,15 @@ argocd app create streamforge \
 
 ```
 streamforge/
-├── docker-compose.yml            # LocalStack for local development
+├── docker-compose.yml            # LocalStack, plus API and worker with --profile app
+├── docker/                       # api.Dockerfile, worker.Dockerfile
+├── docs/architecture.drawio      # Local flow and AWS design diagrams
 ├── scripts/                      # LocalStack init and verify scripts
 ├── src/
 │   ├── api/                      # REST API
 │   ├── transcode-worker/         # FFmpeg transcoding worker
 │   └── frontend/                 # Video player and UI (not built yet)
+├── .github/workflows/ci.yml      # Tests, image build, Trivy scan
 │
 │   Planned:
 ├── terraform/
@@ -225,8 +239,7 @@ streamforge/
 │   │                             # cloudfront, eventbridge, sqs, backend
 │   └── layers/                   # networking, compute, storage, messaging, backend
 ├── k8s/                          # deployments, services, keda, rollouts
-├── docker/                       # api, worker and frontend Dockerfiles
-└── .github/workflows/            # ci.yml, cd.yml
+└── .github/workflows/cd.yml      # Push to ECR via OIDC, update the config repo
 ```
 
 ## Contributing
