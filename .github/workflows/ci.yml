@@ -46,6 +46,28 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=optional --audit-level=high
 
+  terraform:
+    name: Terraform fmt and validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.6
+
+      - name: Format
+        run: terraform fmt -check -recursive terraform
+
+      - name: Validate layers
+        run: |
+          for layer in terraform/layers/*/; do
+            echo "::group::$layer"
+            terraform -chdir="$layer" init -backend=false -input=false
+            terraform -chdir="$layer" validate
+            echo "::endgroup::"
+          done
+
   image:
     name: Build and scan ${{ matrix.service }} image
     needs: test
