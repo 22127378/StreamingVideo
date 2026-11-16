@@ -27,10 +27,16 @@ const baseConfig = {
 };
 
 // S3 Client (forcePathStyle for LocalStack / MinIO)
-export const s3Client = new S3Client({
-  ...baseConfig,
-  forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE === 'true' || !!endpoint,
-});
+const forcePathStyle = process.env.AWS_S3_FORCE_PATH_STYLE === 'true' || !!endpoint;
+export const s3Client = new S3Client({ ...baseConfig, forcePathStyle });
+
+// Presigned URL do trình duyệt gọi, nên phải dùng host mà trình duyệt truy cập được.
+// Khi API chạy trong Docker, AWS_ENDPOINT_URL là http://localstack:4566 (chỉ trong mạng Docker),
+// còn AWS_S3_PUBLIC_ENDPOINT là http://localhost:4566. Trên AWS thật thì bỏ trống cả hai.
+const publicEndpoint = process.env.AWS_S3_PUBLIC_ENDPOINT || undefined;
+export const s3PresignClient = publicEndpoint
+  ? new S3Client({ ...baseConfig, endpoint: publicEndpoint, credentials, forcePathStyle })
+  : s3Client;
 
 // DynamoDB Document Client
 const ddbClient = new DynamoDBClient(baseConfig);

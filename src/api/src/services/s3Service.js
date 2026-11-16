@@ -5,7 +5,7 @@ import {
   DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { s3Client, config } from '../config/aws.js';
+import { s3Client, s3PresignClient, config } from '../config/aws.js';
 
 /**
  * Sinh S3 Presigned URL để client có thể upload trực tiếp file video lên S3
@@ -15,8 +15,9 @@ import { s3Client, config } from '../config/aws.js';
  * @returns {Promise<{ uploadUrl: string, s3Key: string, bucket: string, expiresIn: number }>}
  */
 export async function generateUploadPresignedUrl(fileName, contentType, videoId) {
-  // Lấy đuôi file mở rộng an toàn
-  const ext = fileName.includes('.') ? fileName.split('.').pop() : 'mp4';
+  // Đuôi file lấy từ tên do client gửi, chỉ chấp nhận chữ và số để key luôn có dạng raw/{id}/source.{ext}
+  const candidate = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+  const ext = /^[a-z0-9]{1,10}$/.test(candidate) ? candidate : 'mp4';
   const s3Key = `raw/${videoId}/source.${ext}`;
   const expiresIn = 3600; // 1 hour
 
@@ -30,7 +31,7 @@ export async function generateUploadPresignedUrl(fileName, contentType, videoId)
     },
   });
 
-  const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn });
+  const uploadUrl = await getSignedUrl(s3PresignClient, command, { expiresIn });
 
   return {
     uploadUrl,

@@ -111,4 +111,7 @@ test('S3 presigned upload URL uses raw/{videoId}/source.{ext}', async () => {
   assert.equal(result.s3Key, `raw/${VIDEO_A}/source.mov`);
   assert.equal(result.bucket, config.rawBucket);
   assert.match(result.uploadUrl, /source\.mov/);
+
+  const sneaky = await generateUploadPresignedUrl('clip.mp4/../../etc', 'video/mp4', VIDEO_A);
+  assert.equal(sneaky.s3Key, `raw/${VIDEO_A}/source.mp4`);
 });
