@@ -1,7 +1,7 @@
 services:
   localstack:
     container_name: streamforge-localstack
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.4 # bản mới hơn yêu cầu LOCALSTACK_AUTH_TOKEN
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack Gateway
       - "127.0.0.1:4510-4559:4510-4559"  # External service port range
