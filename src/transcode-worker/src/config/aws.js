@@ -64,5 +64,8 @@ export const config = {
   retryDelaySeconds: parseInt(process.env.SQS_RETRY_DELAY || '30', 10),
   // Khi nhận SIGTERM, chờ job hiện tại tối đa chừng này giây rồi trả message về queue
   shutdownGraceSeconds: parseInt(process.env.SHUTDOWN_GRACE_SECONDS || '25', 10),
+  // Giới hạn chi phí transcode: video dài hơn hoặc lớn hơn mức này bị từ chối, không retry
+  maxSourceDurationSeconds: parseInt(process.env.MAX_SOURCE_DURATION_SECONDS || '1800', 10),
+  maxSourceDimension: parseInt(process.env.MAX_SOURCE_DIMENSION || '4096', 10),
   uploadConcurrency: parseInt(process.env.S3_UPLOAD_CONCURRENCY || '8', 10),
 };

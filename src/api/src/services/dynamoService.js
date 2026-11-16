@@ -23,6 +23,7 @@ export async function createVideoRecord(videoData) {
     description: videoData.description || '',
     originalFileName: videoData.originalFileName,
     contentType: videoData.contentType || 'video/mp4',
+    fileSize: videoData.fileSize,
     tier: videoData.tier || 'free', // 'free' or 'premium'
     status: 'UPLOADING', // UPLOADING -> PROCESSING -> READY -> FAILED
     rawS3Key: videoData.rawS3Key,

@@ -80,7 +80,28 @@ async function deleteMessage(receiptHandle) {
   );
 }
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Lỗi do chính video nguồn (quá dài, quá lớn): không retry */
+export class RejectedSourceError extends Error {}
+
+/**
+ * Giới hạn chi phí transcode: từ chối video quá dài hoặc độ phân giải quá lớn
+ * @param {{ duration: number, width: number, height: number }} meta
+ * @param {{ maxSourceDurationSeconds: number, maxSourceDimension: number }} limits
+ */
+export function assertWithinLimits(meta, limits = config) {
+  if (meta.duration > limits.maxSourceDurationSeconds) {
+    throw new RejectedSourceError(
+      `Video dài ${Math.round(meta.duration)}s, vượt giới hạn ${limits.maxSourceDurationSeconds}s`
+    );
+  }
+  if (Math.max(meta.width, meta.height) > limits.maxSourceDimension) {
+    throw new RejectedSourceError(
+      `Độ phân giải ${meta.width}x${meta.height} vượt giới hạn cạnh dài ${limits.maxSourceDimension}px`
+    );
+  }
+}
+
+export const UUID_RE =/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Quyết định cách xử lý một lần thất bại dựa trên số lần message đã được nhận.
@@ -160,6 +181,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     console.log('[Worker] Đang phân tích thông số video gốc...');
     const meta = await probeVideo(rawLocalPath);
     console.log(`Video gốc: ${meta.width}x${meta.height}, thời lượng: ${meta.duration}s, codec: ${meta.codec}`);
+    assertWithinLimits(meta);
 
     // 4. Tạo ảnh Thumbnail JPG tại 2s
     console.log('[Worker] Đang trích xuất Thumbnail...');
@@ -216,8 +238,20 @@ export async function processTranscodeMessage(message, { signal } = {}) {
       return 'released';
     }
 
-    console.error(`[Worker] Xử lý video ${videoId} thất bại:`, error);
     const errorMessage = error.message || 'Unknown transcoding error';
+
+    // Video vượt giới hạn: thử lại cũng vô ích, nên đánh FAILED và xóa message ngay
+    if (error instanceof RejectedSourceError) {
+      console.warn(`[Worker] Từ chối video ${videoId}: ${errorMessage}`);
+      stopHeartbeat();
+      await updateVideoStatus(videoId, 'FAILED', { errorMessage, attempt: receiveCount }).catch((e) =>
+        console.error(`[Worker] Không cập nhật được trạng thái của ${videoId}:`, e.message)
+      );
+      await deleteMessage(message.ReceiptHandle);
+      return 'rejected';
+    }
+
+    console.error(`[Worker] Xử lý video ${videoId} thất bại:`, error);
     const plan = planFailure(receiveCount, config);
 
     // Message không bị xóa: SQS sẽ giao lại, hoặc chuyển sang DLQ ở lần cuối

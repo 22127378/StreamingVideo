@@ -14,7 +14,7 @@ import { s3Client, s3PresignClient, config } from '../config/aws.js';
  * @param {string} videoId Unique ID của video
  * @returns {Promise<{ uploadUrl: string, s3Key: string, bucket: string, expiresIn: number }>}
  */
-export async function generateUploadPresignedUrl(fileName, contentType, videoId) {
+export async function generateUploadPresignedUrl(fileName, contentType, videoId, fileSize) {
   // Đuôi file lấy từ tên do client gửi, chỉ chấp nhận chữ và số để key luôn có dạng raw/{id}/source.{ext}
   const candidate = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
   const ext = /^[a-z0-9]{1,10}$/.test(candidate) ? candidate : 'mp4';
@@ -25,19 +25,29 @@ export async function generateUploadPresignedUrl(fileName, contentType, videoId)
     Bucket: config.rawBucket,
     Key: s3Key,
     ContentType: contentType,
+    ContentLength: fileSize,
     Metadata: {
       'original-name': encodeURIComponent(fileName),
       'video-id': videoId,
     },
   });
 
-  const uploadUrl = await getSignedUrl(s3PresignClient, command, { expiresIn });
+  // Ký luôn Content-Length và Content-Type: S3 từ chối (403) mọi request PUT gửi kích thước
+  // hoặc kiểu file khác với lúc xin URL, nên client không thể đẩy file lớn hơn dung lượng đã khai báo.
+  const uploadUrl = await getSignedUrl(s3PresignClient, command, {
+    expiresIn,
+    signableHeaders: new Set(['content-length', 'content-type']),
+  });
 
   return {
     uploadUrl,
     s3Key,
     bucket: config.rawBucket,
     expiresIn,
+    requiredHeaders: {
+      'Content-Type': contentType,
+      'Content-Length': String(fileSize),
+    },
   };
 }
 

@@ -63,6 +63,13 @@ export const config = {
   videosByCreatedAtIndex: process.env.DYNAMODB_VIDEOS_CREATED_AT_INDEX || 'entityType-createdAt-index',
   cdnBaseUrl: process.env.CDN_BASE_URL || 'http://localhost:4566/streamforge-processed',
   jwtSecret: resolveJwtSecret(),
+  // Giới hạn chi phí: dung lượng upload tối đa (mặc định 2 GiB)
+  maxUploadBytes: parseInt(process.env.MAX_UPLOAD_BYTES || String(2 * 1024 ** 3), 10),
+  // Số request tạo upload/token mỗi IP trong một cửa sổ thời gian (0 = tắt)
+  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '30', 10),
+  rateLimitWindowSeconds: parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS || '600', 10),
+  // Số proxy đứng trước API (CloudFront + ALB = 2) để lấy đúng IP client từ X-Forwarded-For
+  trustProxyHops: parseInt(process.env.TRUST_PROXY_HOPS || '0', 10),
 };
 
 /**

@@ -106,12 +106,41 @@ test('playback-token rejects malformed input', async () => {
   assert.equal((await call('POST', '/api/auth/playback-token', { body: { videoId: 'abc' } })).status, 400);
 });
 
-test('S3 presigned upload URL uses raw/{videoId}/source.{ext}', async () => {
-  const result = await generateUploadPresignedUrl('sample.mov', 'video/quicktime', VIDEO_A);
+test('S3 presigned upload URL uses raw/{videoId}/source.{ext} and signs size and type', async () => {
+  const result = await generateUploadPresignedUrl('sample.mov', 'video/quicktime', VIDEO_A, 1234);
   assert.equal(result.s3Key, `raw/${VIDEO_A}/source.mov`);
   assert.equal(result.bucket, config.rawBucket);
   assert.match(result.uploadUrl, /source\.mov/);
+  const signed = new URL(result.uploadUrl).searchParams.get('X-Amz-SignedHeaders').split(';');
+  assert.ok(signed.includes('content-length') && signed.includes('content-type'), signed.join(';'));
+  assert.deepEqual(result.requiredHeaders, { 'Content-Type': 'video/quicktime', 'Content-Length': '1234' });
 
-  const sneaky = await generateUploadPresignedUrl('clip.mp4/../../etc', 'video/mp4', VIDEO_A);
+  const sneaky = await generateUploadPresignedUrl('clip.mp4/../../etc', 'video/mp4', VIDEO_A, 10);
   assert.equal(sneaky.s3Key, `raw/${VIDEO_A}/source.mp4`);
+});
+
+test('upload-url requires a fileSize within MAX_UPLOAD_BYTES', async () => {
+  const body = { fileName: 'a.mp4', contentType: 'video/mp4' };
+  assert.equal((await call('POST', '/api/videos/upload-url', { body })).status, 400);
+  assert.equal((await call('POST', '/api/videos/upload-url', { body: { ...body, fileSize: 0 } })).status, 400);
+  const tooBig = await call('POST', '/api/videos/upload-url', { body: { ...body, fileSize: config.maxUploadBytes + 1 } });
+  assert.equal(tooBig.status, 400);
+  assert.match(JSON.stringify(tooBig.body.errors), /fileSize/);
+});
+
+test('write endpoints are rate limited per client IP', async () => {
+  const limited = createApp({ rateLimit: { max: 2, windowSeconds: 60 } }).listen(0);
+  const url = `http://127.0.0.1:${limited.address().port}/api/auth/playback-token`;
+  const post = () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"tier":"gold"}' });
+  try {
+    assert.equal((await post()).status, 400);
+    assert.equal((await post()).status, 400);
+    const third = await post();
+    assert.equal(third.status, 429);
+    assert.ok(Number(third.headers.get('retry-after')) > 0);
+    // Health và các route đọc không bị giới hạn
+    assert.equal((await fetch(`http://127.0.0.1:${limited.address().port}/health`)).status, 200);
+  } finally {
+    limited.close();
+  }
 });

@@ -22,6 +22,11 @@ const RequestUploadUrlSchema = z.object({
   contentType: z
     .string()
     .regex(/^video\//, 'ContentType phải là định dạng video (ví dụ: video/mp4, video/quicktime)'),
+  fileSize: z
+    .number()
+    .int()
+    .positive()
+    .max(config.maxUploadBytes, `File vượt quá giới hạn ${config.maxUploadBytes} bytes`),
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
   tier: z.enum(['free', 'premium']).default('free'),
@@ -96,10 +101,11 @@ export async function requestUploadUrl(req, res, next) {
     const videoId = uuidv4();
 
     // 1. Sinh Presigned PUT URL từ S3
-    const { uploadUrl, s3Key, bucket, expiresIn } = await generateUploadPresignedUrl(
+    const { uploadUrl, s3Key, bucket, expiresIn, requiredHeaders } = await generateUploadPresignedUrl(
       validatedData.fileName,
       validatedData.contentType,
-      videoId
+      videoId,
+      validatedData.fileSize
     );
 
     // 2. Tạo record UPLOADING trong DynamoDB
@@ -109,6 +115,7 @@ export async function requestUploadUrl(req, res, next) {
       description: validatedData.description || '',
       originalFileName: validatedData.fileName,
       contentType: validatedData.contentType,
+      fileSize: validatedData.fileSize,
       tier: validatedData.tier,
       rawS3Key: s3Key,
     });
@@ -119,6 +126,8 @@ export async function requestUploadUrl(req, res, next) {
       data: {
         videoId,
         uploadUrl,
+        // PUT phải gửi đúng các header này, sai kích thước hoặc kiểu file thì S3 trả 403
+        uploadHeaders: requiredHeaders,
         s3Key,
         bucket,
         expiresInSeconds: expiresIn,

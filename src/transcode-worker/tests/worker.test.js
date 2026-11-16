@@ -10,7 +10,7 @@ import {
   selectProfiles,
   parseFrameRate,
 } from '../src/services/ffmpegService.js';
-import { planFailure } from '../src/services/sqsConsumer.js';
+import { planFailure, assertWithinLimits, RejectedSourceError } from '../src/services/sqsConsumer.js';
 import { forEachLimit } from '../src/services/s3Service.js';
 import { FFMPEG_BINARIES } from '../src/services/ffmpegService.js';
 import { spawnSync } from 'node:child_process';
@@ -128,6 +128,13 @@ test('StreamForge Transcode Worker Unit Tests', async (t) => {
     assert.deepStrictEqual(planFailure(NaN, opts), { final: false, retryInSeconds: 30 });
     // Không vượt quá giới hạn 12 giờ của SQS
     assert.strictEqual(planFailure(5, { maxReceiveCount: 10, retryDelaySeconds: 20000 }).retryInSeconds, 43200);
+  });
+
+  await t.test('10. assertWithinLimits rejects sources that are too long or too large', () => {
+    const limits = { maxSourceDurationSeconds: 600, maxSourceDimension: 4096 };
+    assert.doesNotThrow(() => assertWithinLimits({ duration: 600, width: 3840, height: 2160 }, limits));
+    assert.throws(() => assertWithinLimits({ duration: 601, width: 1920, height: 1080 }, limits), RejectedSourceError);
+    assert.throws(() => assertWithinLimits({ duration: 60, width: 2160, height: 7680 }, limits), RejectedSourceError);
   });
 
   await t.test('9. forEachLimit never exceeds the concurrency limit', async () => {
