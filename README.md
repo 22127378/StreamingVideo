@@ -67,6 +67,8 @@ cd src/transcode-worker && npm install && npm run dev    # in a second terminal
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+Editable diagrams of both the local flow and the AWS design are in `docs/architecture.drawio` (open it at app.diagrams.net or with the Draw.io VS Code extension).
+
 In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally there is no EventBridge, so the API sends the SQS message itself when the client calls `POST /api/videos/complete`.
 
 ## Tech stack
