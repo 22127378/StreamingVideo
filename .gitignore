@@ -27,3 +27,15 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# tfvars và backend.hcl chứa email, account ID: chỉ commit bản .example
+*.tfvars
+!*.tfvars.example
+terraform/backend.hcl
+*_override.tf
