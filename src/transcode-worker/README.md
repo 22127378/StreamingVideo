@@ -22,7 +22,11 @@ Worker đọc job từ SQS và chuyển video gốc thành HLS nhiều mức bit
 7. Upload playlist, segment và thumbnail lên bucket processed. Playlist đặt `no-cache`, segment được cache một năm.
 8. Cập nhật DynamoDB sang `READY`, xoá message khỏi queue và dọn thư mục tạm.
 
-Nếu một bước lỗi, video bị đánh dấu `FAILED` và message được giữ lại để SQS thử lại. Sau 3 lần thất bại, message chuyển sang DLQ.
+Nếu một bước lỗi, video vẫn ở `PROCESSING` kèm `lastError` và `attempt`, còn message được hẹn giờ quay lại queue sau 30 giây, rồi 60 giây. Đến lần thứ 3 vẫn lỗi thì video chuyển sang `FAILED` và SQS đưa message vào DLQ ngay. Message có body không hợp lệ hoặc thiếu `videoId`/`rawS3Key` thì bị bỏ qua và cũng đi vào DLQ sau 3 lần.
+
+Khi nhận SIGTERM hoặc SIGINT, worker ngừng nhận job mới và chờ job đang chạy tối đa 25 giây. Hết thời gian đó (hoặc khi nhận tín hiệu lần hai), worker kill ffmpeg, dọn thư mục tạm và trả message về queue để worker khác nhận ngay. Video không bị đánh dấu lỗi trong trường hợp này.
+
+Khi upload kết quả, segment được đọc dạng stream, tối đa 8 file cùng lúc. Playlist được upload sau cùng để player không đọc phải playlist trỏ tới segment chưa có.
 
 ## Chạy
 
@@ -33,4 +37,15 @@ npm test        # kiểm tra binary FFmpeg, chọn profile, master playlist
 npm run dev     # hoặc npm start
 ```
 
-Các biến môi trường riêng của worker (đều không bắt buộc): `SQS_POLLING_WAIT_TIME` (mặc định 10), `SQS_MAX_MESSAGES` (1), `SQS_VISIBILITY_TIMEOUT` (300), `SQS_HEARTBEAT_INTERVAL` (120, phải nhỏ hơn visibility timeout).
+Các biến môi trường riêng của worker, đều không bắt buộc:
+
+| Biến | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| `SQS_POLLING_WAIT_TIME` | 10 | Số giây long poll |
+| `SQS_MAX_MESSAGES` | 1 | Số message nhận mỗi lần poll |
+| `SQS_VISIBILITY_TIMEOUT` | 300 | Visibility timeout khi nhận message |
+| `SQS_HEARTBEAT_INTERVAL` | 120 | Chu kỳ gia hạn visibility, phải nhỏ hơn visibility timeout |
+| `SQS_MAX_RECEIVE_COUNT` | 3 | Phải khớp `maxReceiveCount` của redrive policy |
+| `SQS_RETRY_DELAY` | 30 | Lần thử thứ n chờ n lần số giây này |
+| `SHUTDOWN_GRACE_SECONDS` | 25 | Thời gian chờ job hiện tại khi tắt worker |
+| `S3_UPLOAD_CONCURRENCY` | 8 | Số file upload song song |
