@@ -6,6 +6,7 @@ import { docClient, config } from '../config/aws.js';
  * @param {string} videoId
  * @param {string} status 'PROCESSING' | 'READY' | 'FAILED'
  * @param {Object} extraFields (qualities, masterPlaylistUrl, duration, thumbnailUrl, errorMessage...)
+ * @throws ConditionalCheckFailedException khi video không còn tồn tại hoặc đang bị xóa
  */
 export async function updateVideoStatus(videoId, status, extraFields = {}) {
   const timestamp = new Date().toISOString();
@@ -28,11 +29,15 @@ export async function updateVideoStatus(videoId, status, extraFields = {}) {
     }
   }
 
+  // Không tạo lại bản ghi của video đã bị xóa hoặc đang bị xóa (UpdateCommand mặc định là upsert)
+  expAttrValues[':deleting'] = 'DELETING';
+
   const response = await docClient.send(
     new UpdateCommand({
       TableName: config.videosTable,
       Key: { videoId },
       UpdateExpression: `SET ${updateExpParts.join(', ')}`,
+      ConditionExpression: 'attribute_exists(videoId) AND #status <> :deleting',
       ExpressionAttributeNames: expAttrNames,
       ExpressionAttributeValues: expAttrValues,
       ReturnValues: 'ALL_NEW',

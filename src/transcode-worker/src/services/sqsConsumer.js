@@ -71,6 +71,17 @@ async function setMessageVisibility(receiptHandle, seconds) {
   }
 }
 
+async function deleteMessage(receiptHandle) {
+  await sqsClient.send(
+    new DeleteMessageCommand({
+      QueueUrl: config.transcodeQueueUrl,
+      ReceiptHandle: receiptHandle,
+    })
+  );
+}
+
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Quyết định cách xử lý một lần thất bại dựa trên số lần message đã được nhận.
  * Lần cuối cùng (bằng maxReceiveCount) thì đánh dấu FAILED vì SQS sẽ chuyển message sang DLQ.
@@ -90,7 +101,7 @@ export function planFailure(receiveCount, { maxReceiveCount, retryDelaySeconds }
  * Xử lý một Transcode Job đơn lẻ
  * @param {Object} message AWS SQS Message (nhận với AttributeNames: ['All'])
  * @param {{ signal?: AbortSignal }} options Khi signal bị abort, job dừng và message được trả về queue
- * @returns {Promise<'done' | 'retry' | 'failed' | 'released' | 'invalid'>}
+ * @returns {Promise<'done' | 'retry' | 'failed' | 'released' | 'invalid' | 'skipped'>}
  */
 export async function processTranscodeMessage(message, { signal } = {}) {
   let jobData;
@@ -109,8 +120,10 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     targetResolutions = ['1080p', '720p', '480p', '360p'],
   } = jobData;
 
-  if (!videoId || !rawS3Key) {
-    console.error('[SQS] Message thiếu videoId hoặc rawS3Key, để SQS chuyển sang DLQ:', message.Body);
+  // videoId được dùng làm tên thư mục tạm (và bị xóa đệ quy sau đó), nên bắt buộc là UUID
+  // để một message giả mạo như "../.." không trỏ ra ngoài TEMP_ROOT
+  if (!UUID_RE.test(videoId || '') || typeof rawS3Key !== 'string' || !rawS3Key) {
+    console.error('[SQS] Message thiếu hoặc sai videoId/rawS3Key, để SQS chuyển sang DLQ:', message.Body);
     return 'invalid';
   }
 
@@ -130,8 +143,15 @@ export async function processTranscodeMessage(message, { signal } = {}) {
   try {
     signal?.throwIfAborted();
 
-    // 1. Cập nhật DynamoDB sang PROCESSING
-    await updateVideoStatus(videoId, 'PROCESSING', { attempt: receiveCount });
+    // 1. Cập nhật DynamoDB sang PROCESSING. Video đã bị xóa thì bỏ job này luôn.
+    try {
+      await updateVideoStatus(videoId, 'PROCESSING', { attempt: receiveCount });
+    } catch (err) {
+      if (err.name !== 'ConditionalCheckFailedException') throw err;
+      await deleteMessage(message.ReceiptHandle);
+      console.warn(`[Worker] Video ${videoId} không còn tồn tại hoặc đang bị xóa, bỏ qua job`);
+      return 'skipped';
+    }
 
     // 2. Tải video gốc từ S3
     await downloadFileFromS3(rawBucket, rawS3Key, rawLocalPath, { signal });
@@ -183,12 +203,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     });
 
     // 10. Xóa Message khỏi SQS Queue
-    await sqsClient.send(
-      new DeleteMessageCommand({
-        QueueUrl: config.transcodeQueueUrl,
-        ReceiptHandle: message.ReceiptHandle,
-      })
-    );
+    await deleteMessage(message.ReceiptHandle);
     console.log(`[SQS] Đã xóa message thành công khỏi queue.`);
     console.log(`[Worker] Hoàn tất xử lý video: ${videoId}`);
     return 'done';
