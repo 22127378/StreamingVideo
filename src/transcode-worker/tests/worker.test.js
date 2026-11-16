@@ -12,15 +12,15 @@ import {
 } from '../src/services/ffmpegService.js';
 import { planFailure } from '../src/services/sqsConsumer.js';
 import { forEachLimit } from '../src/services/s3Service.js';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+import { FFMPEG_BINARIES } from '../src/services/ffmpegService.js';
+import { spawnSync } from 'node:child_process';
 
 test('StreamForge Transcode Worker Unit Tests', async (t) => {
-  await t.test('1. FFmpeg and FFprobe binaries are bundled and accessible', () => {
-    assert.ok(ffmpegInstaller.path, 'FFmpeg binary path should exist');
-    assert.ok(ffprobeInstaller.path, 'FFprobe binary path should exist');
-    assert.ok(fs.existsSync(ffmpegInstaller.path), `FFmpeg binary must exist on disk: ${ffmpegInstaller.path}`);
-    assert.ok(fs.existsSync(ffprobeInstaller.path), `FFprobe binary must exist on disk: ${ffprobeInstaller.path}`);
+  await t.test('1. FFmpeg and FFprobe binaries resolve and run', () => {
+    for (const [name, bin] of Object.entries(FFMPEG_BINARIES)) {
+      const result = spawnSync(bin, ['-version'], { encoding: 'utf8' });
+      assert.strictEqual(result.status, 0, `${name} (${bin}) must run: ${result.error?.message || result.stderr}`);
+    }
   });
 
   await t.test('2. HLS Profiles contain required bitrates and dimensions', () => {

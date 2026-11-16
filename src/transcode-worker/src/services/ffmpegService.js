@@ -1,16 +1,35 @@
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import fs from 'fs';
 import path from 'path';
 
-// Cấu hình đường dẫn binary cho ffmpeg và ffprobe
-if (ffmpegInstaller.path) {
-  ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+/**
+ * Chọn binary ffmpeg/ffprobe theo thứ tự:
+ * 1. FFMPEG_PATH / FFPROBE_PATH (Docker image cài ffmpeg của hệ điều hành)
+ * 2. Package @ffmpeg-installer / @ffprobe-installer (optionalDependencies, tiện cho dev trên máy)
+ * 3. "ffmpeg" / "ffprobe" trong PATH
+ */
+async function resolveBinaries() {
+  let bundled = {};
+  if (!process.env.FFMPEG_PATH || !process.env.FFPROBE_PATH) {
+    try {
+      const [ffmpegPkg, ffprobePkg] = await Promise.all([
+        import('@ffmpeg-installer/ffmpeg'),
+        import('@ffprobe-installer/ffprobe'),
+      ]);
+      bundled = { ffmpeg: ffmpegPkg.default.path, ffprobe: ffprobePkg.default.path };
+    } catch {
+      // Package optional không được cài (ví dụ trong Docker image), dùng PATH
+    }
+  }
+  return {
+    ffmpeg: process.env.FFMPEG_PATH || bundled.ffmpeg || 'ffmpeg',
+    ffprobe: process.env.FFPROBE_PATH || bundled.ffprobe || 'ffprobe',
+  };
 }
-if (ffprobeInstaller.path) {
-  ffmpeg.setFfprobePath(ffprobeInstaller.path);
-}
+
+export const FFMPEG_BINARIES = await resolveBinaries();
+ffmpeg.setFfmpegPath(FFMPEG_BINARIES.ffmpeg);
+ffmpeg.setFfprobePath(FFMPEG_BINARIES.ffprobe);
 
 // Bảng cấu hình các profile độ phân giải và bitrate cho Adaptive Bitrate Streaming (HLS)
 export const HLS_PROFILES = {
