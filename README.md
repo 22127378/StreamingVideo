@@ -1,35 +1,33 @@
-# 🎬 StreamForge
+# StreamForge
 
-> **Video Streaming Platform on AWS EKS**
-> Personal Project · June 2026 – August 2026 · [GitHub](#)
+A video streaming platform on AWS EKS. Personal project, June to August 2026.
 
----
+Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. The design aims for near-zero idle cost (transcode workers scale to zero on an empty queue and run on Spot), GitOps delivery with ArgoCD, and no long-lived AWS keys anywhere.
 
-## 📋 Table of Contents
+## Current state
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Infrastructure (IaC)](#infrastructure-iac)
-- [Transcode Pipeline](#transcode-pipeline)
-- [GitOps & Delivery](#gitops--delivery)
-- [Security](#security)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
+What exists in this repo today:
 
----
+- A local AWS stack on LocalStack (S3, SQS with a dead letter queue, DynamoDB), started with Docker Compose.
+- `src/api`: an Express REST API that issues S3 presigned upload URLs, tracks video metadata in DynamoDB, queues transcode jobs on SQS, and issues JWT playback tokens for free and premium tiers.
+- `src/transcode-worker`: an SQS consumer that downloads the source video, probes it, generates a thumbnail, transcodes up to four HLS renditions (1080p, 720p, 480p, 360p), writes a master playlist, uploads everything to the processed bucket and marks the video `READY`.
 
-## Overview
+Not built yet: the frontend, the Terraform modules, Kubernetes manifests, Dockerfiles and the CI/CD pipeline. The sections below describe the target design for those parts.
 
-**StreamForge** is a fully cloud-native video streaming platform built on **AWS EKS**, designed from scratch with a focus on:
+## Running locally
 
-- **Zero-to-cost infrastructure** — state managed on S3 + KMS, all resources provisioned via Terraform
-- **Event-driven transcoding** — serverless pipeline that auto-scales based on queue depth
-- **GitOps delivery** — ArgoCD-powered continuous deployment with automatic rollbacks
-- **End-to-end security** — no static keys, OIDC authentication, least-privilege IAM, and signed cookies for content protection
+Requirements: Docker, Node.js 20 or newer, and optionally the AWS CLI for the verify script.
 
----
+```bash
+cp .env.example .env
+docker compose up -d                # LocalStack; buckets, queues and table are created on startup
+./scripts/verify-local.sh           # or scripts/verify-local.ps1 on Windows
+
+cd src/api && npm install && npm run dev                 # http://localhost:4000
+cd src/transcode-worker && npm install && npm run dev    # in a second terminal
+```
+
+`src/api/api.http` has sample requests for the full flow: request an upload URL, PUT the file to it, call `/api/videos/complete`, then poll `/api/videos/:id` until the status is `READY`.
 
 ## Architecture
 
@@ -69,31 +67,27 @@
 └──────────────────────────────────────────────────────────────────┘
 ```
 
----
+In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally there is no EventBridge, so the API sends the SQS message itself when the client calls `POST /api/videos/complete`.
 
-## Tech Stack
+## Tech stack
 
-| Layer              | Technology                                       |
-| ------------------ | ------------------------------------------------ |
-| **Container Orchestration** | AWS EKS (Kubernetes)                    |
-| **Infrastructure** | Terraform (10 modules, 5 layers)                 |
-| **Networking**     | VPC, CloudFront, ALB                             |
-| **Storage**        | S3 (video assets + Terraform state), DynamoDB    |
-| **Messaging**      | EventBridge → SQS → DLQ                         |
-| **Transcoding**    | FFmpeg (on Spot Instances)                       |
-| **Autoscaling**    | KEDA (scale-to-zero on queue depth)              |
-| **GitOps**         | ArgoCD (separate config repo)                    |
-| **CI/CD**          | GitHub Actions, Argo Rollouts                    |
-| **Monitoring**     | Prometheus, Trivy (security scanning)            |
-| **Security**       | GitHub OIDC, IRSA, Signed Cookies, KMS           |
+| Layer | Technology |
+| --- | --- |
+| Container orchestration | AWS EKS |
+| Infrastructure | Terraform (10 modules, 5 layers) |
+| Networking | VPC, CloudFront, ALB |
+| Storage | S3 for video assets and Terraform state, DynamoDB |
+| Messaging | EventBridge, SQS, DLQ |
+| Transcoding | FFmpeg on Spot instances |
+| Autoscaling | KEDA, scaling to zero on queue depth |
+| GitOps | ArgoCD with a separate config repo |
+| CI/CD | GitHub Actions, Argo Rollouts |
+| Monitoring and scanning | Prometheus, Trivy |
+| Security | GitHub OIDC, IRSA, CloudFront signed cookies, KMS |
 
----
+## Infrastructure (planned)
 
-## Infrastructure (IaC)
-
-A fully **Infrastructure as Code** platform provisioned with Terraform:
-
-### Terraform Modules (10 modules across 5 layers)
+Terraform is split into 10 modules applied in 5 layers:
 
 ```
 terraform/
@@ -118,17 +112,9 @@ terraform/
     └── module: backend       # S3 backend + KMS encryption for state
 ```
 
-### State Management
+Terraform state lives in S3, encrypted with KMS, with a DynamoDB table for state locking. Compute is meant to scale down to nothing when idle, so the standing cost is mostly storage.
 
-- **Remote state**: Stored in S3 with server-side encryption (KMS)
-- **State locking**: DynamoDB table for concurrent access protection
-- **Zero cost at rest**: Resources designed to scale down to zero when idle
-
----
-
-## Transcode Pipeline
-
-An **event-driven, serverless-inspired** transcoding pipeline:
+## Transcode pipeline
 
 ```
   ┌──────────┐     ┌─────────────┐     ┌──────────┐     ┌──────────────┐
@@ -144,55 +130,35 @@ An **event-driven, serverless-inspired** transcoding pipeline:
                                        └──────────┘     └──────────────┘
 ```
 
-### Key Features
+KEDA scales the workers from zero based on SQS queue depth, and the workers run on Spot instances, which AWS prices at up to 90% below on-demand. A job that fails three times moves to the dead letter queue for inspection. Each video gets HLS renditions at the resolutions its source supports (never upscaled, aspect ratio preserved) plus a thumbnail.
 
-- **KEDA Autoscaling**: Workers scale from **0 → N** based on SQS queue depth
-- **Spot Instances**: Transcode workers run on EC2 Spot for up to **90% cost savings**
-- **Dead Letter Queue**: Failed jobs are automatically routed to DLQ for retry/inspection
-- **FFmpeg**: Industry-standard transcoding (adaptive bitrate, multiple resolutions)
+## GitOps and delivery (planned)
 
----
-
-## GitOps & Delivery
-
-### ArgoCD Setup
-
-- **Separate config repository** for Kubernetes manifests (GitOps best practice)
-- **Automatic sync**: ArgoCD watches the config repo and reconciles cluster state
-- **Argo Rollouts**: Canary/blue-green deployments with automatic rollback on failure
-- **Prometheus-driven rollbacks**: Rollouts monitored by Prometheus metrics; automatic rollback on anomaly detection
-
-### CI/CD Pipeline
+Kubernetes manifests live in a separate config repository. ArgoCD watches it and syncs the cluster. Argo Rollouts runs canary or blue/green releases and rolls back automatically when Prometheus metrics show a regression.
 
 ```
 GitHub Push → GitHub Actions → Build & Test → Trivy Scan → Push Image → Update Config Repo → ArgoCD Sync → Argo Rollout
 ```
 
-| Stage              | Tool                  | Description                                    |
-| ------------------ | --------------------- | ---------------------------------------------- |
-| Build & Test       | GitHub Actions        | Compile, lint, unit tests                      |
-| Security Scan      | Trivy                 | Container image vulnerability scanning         |
-| Image Registry     | ECR                   | Push container images                          |
-| Deploy             | ArgoCD                | GitOps sync from config repo to EKS            |
-| Progressive Rollout| Argo Rollouts         | Canary/blue-green with metric analysis         |
-| Monitoring         | Prometheus            | Metrics-driven rollback decisions              |
-
----
+| Stage | Tool | Description |
+| --- | --- | --- |
+| Build and test | GitHub Actions | Compile, lint, unit tests |
+| Security scan | Trivy | Container image vulnerability scan |
+| Image registry | ECR | Push container images |
+| Deploy | ArgoCD | Sync from the config repo to EKS |
+| Progressive rollout | Argo Rollouts | Canary or blue/green with metric analysis |
+| Monitoring | Prometheus | Metrics that drive rollback decisions |
 
 ## Security
 
-### 🔐 Zero Static Keys
-
-| Feature                        | Implementation                                    |
-| ------------------------------ | ------------------------------------------------- |
-| **CI/CD Authentication**       | GitHub OIDC — no static AWS keys in CI            |
-| **Pod-level IAM**              | IRSA (IAM Roles for Service Accounts) — per-pod least privilege |
-| **Container Scanning**         | Trivy in CI pipeline — block deployments on CVEs  |
-| **CDN Access Control**         | CloudFront-only ALB — origin not publicly accessible |
-| **Content Protection**         | Signed cookies — short-lived, tier-gated playback |
-| **State Encryption**           | KMS-encrypted Terraform state in S3               |
-
-### Security Architecture
+| Concern | Approach |
+| --- | --- |
+| CI/CD authentication | GitHub OIDC, so CI holds no static AWS keys |
+| Pod permissions | IRSA, one least-privilege IAM role per service |
+| Container scanning | Trivy in CI blocks images with known CVEs |
+| Origin access | The ALB only accepts traffic from CloudFront |
+| Content protection | Short-lived CloudFront signed cookies per tier |
+| State encryption | Terraform state in S3, encrypted with KMS |
 
 ```
 GitHub Actions (OIDC) ──▶ AWS STS ──▶ Temporary Credentials
@@ -204,20 +170,11 @@ User ──▶ CloudFront (Signed Cookie) ──▶ ALB ──▶ EKS
               └── Short-lived, tier-gated access
 ```
 
----
+Locally, the API simulates tier-gated playback with JWTs signed by `JWT_SECRET`. Anyone can request a premium token, so this is for development only.
 
-## Getting Started
+## Deploying to AWS (planned)
 
-### Prerequisites
-
-- AWS CLI v2 configured
-- Terraform >= 1.5
-- kubectl
-- Helm 3
-- ArgoCD CLI
-- Docker
-
-### Quick Start
+Requirements: AWS CLI v2, Terraform 1.5 or newer, kubectl, Helm 3, the ArgoCD CLI and Docker.
 
 ```bash
 # 1. Clone the repository
@@ -249,87 +206,35 @@ argocd app create streamforge \
   --dest-namespace default
 ```
 
----
-
-## Project Structure
+## Project structure
 
 ```
 streamforge/
-├── terraform/                    # Infrastructure as Code
-│   ├── modules/                  # 10 reusable Terraform modules
-│   │   ├── vpc/
-│   │   ├── security/
-│   │   ├── eks/
-│   │   ├── keda/
-│   │   ├── s3/
-│   │   ├── dynamodb/
-│   │   ├── cloudfront/
-│   │   ├── eventbridge/
-│   │   ├── sqs/
-│   │   └── backend/
-│   └── layers/                   # 5 deployment layers
-│       ├── networking/
-│       ├── compute/
-│       ├── storage/
-│       ├── messaging/
-│       └── backend/
-│
-├── k8s/                          # Kubernetes manifests (or in config repo)
-│   ├── deployments/
-│   ├── services/
-│   ├── keda/
-│   └── rollouts/
-│
-├── src/                          # Application source code
-│   ├── api/                      # REST API / Backend
+├── docker-compose.yml            # LocalStack for local development
+├── scripts/                      # LocalStack init and verify scripts
+├── src/
+│   ├── api/                      # REST API
 │   ├── transcode-worker/         # FFmpeg transcoding worker
-│   └── frontend/                 # Video player / UI
+│   └── frontend/                 # Video player and UI (not built yet)
 │
-├── .github/
-│   └── workflows/                # GitHub Actions CI/CD
-│       ├── ci.yml
-│       └── cd.yml
-│
-├── docker/                       # Dockerfiles
-│   ├── api.Dockerfile
-│   ├── worker.Dockerfile
-│   └── frontend.Dockerfile
-│
-└── README.md
+│   Planned:
+├── terraform/
+│   ├── modules/                  # vpc, security, eks, keda, s3, dynamodb,
+│   │                             # cloudfront, eventbridge, sqs, backend
+│   └── layers/                   # networking, compute, storage, messaging, backend
+├── k8s/                          # deployments, services, keda, rollouts
+├── docker/                       # api, worker and frontend Dockerfiles
+└── .github/workflows/            # ci.yml, cd.yml
 ```
-
----
-
-## Key Metrics & Highlights
-
-| Metric                          | Value                                          |
-| ------------------------------- | ---------------------------------------------- |
-| Terraform Modules               | 10                                             |
-| Infrastructure Layers           | 5                                              |
-| Static Keys in Production       | **0** (GitHub OIDC + IRSA)                     |
-| Minimum Idle Cost               | **~$0** (scale-to-zero with KEDA + Spot)       |
-| Transcode Cost Savings          | Up to **90%** (Spot Instances)                 |
-| Deployment Strategy             | Canary/Blue-Green with auto-rollback           |
-| Security Scanning               | Automated via Trivy in CI                      |
-
----
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Create a branch, commit with the project's message format (`[NAMESPACE] Short description`, see `.claude/skills/commit/SKILL.md`), and open a pull request. Enable the commit hooks once per clone:
 
----
+```bash
+git config core.hooksPath .githooks
+```
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  <b>Built with ❤️ using AWS EKS, Terraform, ArgoCD, and FFmpeg</b>
-</p>
+MIT. See [LICENSE](LICENSE).

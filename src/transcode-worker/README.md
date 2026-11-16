@@ -1,43 +1,36 @@
-# ⚙️ StreamForge - Transcode Worker
+# StreamForge transcode worker
 
-Dịch vụ Worker xử lý video theo kiến trúc hướng sự kiện (Event-driven Architecture), tự động chuyển đổi file video gốc thành định dạng **Adaptive Bitrate HLS (HTTP Live Streaming)** bằng **FFmpeg**.
+Worker đọc job từ SQS và chuyển video gốc thành HLS nhiều mức bitrate bằng FFmpeg.
 
----
+## Một job đi qua những bước nào
 
-## 🌟 Tính năng Cốt lõi
+1. Long polling hàng đợi `streamforge-transcode-queue`. Trong lúc xử lý, worker gia hạn visibility timeout mỗi 120 giây để video dài không bị một worker khác nhận trùng.
+2. Tải video gốc từ bucket raw về thư mục `temp/`.
+3. Dùng ffprobe đọc độ dài, kích thước, fps và góc xoay. Video quay dọc bằng điện thoại được tính theo kích thước hiển thị sau khi xoay.
+4. Chụp thumbnail JPG cao 720px ở giây thứ 2, hoặc ở giữa video nếu video ngắn hơn 2 giây.
+5. Transcode sang các profile phù hợp với nguồn. Profile được chọn theo cạnh ngắn của video, không upscale và giữ nguyên tỷ lệ khung hình:
 
-1. **Lắng nghe sự kiện từ SQS Queue**: Tiêu thụ message từ hàng đợi `streamforge-transcode-queue` qua cơ chế Long Polling.
-2. **Tải dữ liệu từ S3 Raw Bucket**: Tải video gốc tự động về bộ nhớ tạm (`temp/`).
-3. **Phân tích kỹ thuật qua FFprobe**: Trích xuất độ dài, tỷ lệ khung hình, độ phân giải gốc để tối ưu cấu hình transcode.
-4. **Trích xuất Thumbnail tự động**: Chụp ảnh đại diện JPG độ nét cao (1280x720) tại giây thứ 2.
-5. **Adaptive Bitrate Transcoding (HLS)**: Chuyển đổi song song/tuần tự sang các profile phân giải:
-   - **1080p (Full HD)**: 4500 kbps, 1920x1080
-   - **720p (HD)**: 2500 kbps, 1280x720
-   - **480p (SD)**: 1200 kbps, 854x480
-   - **360p (Low)**: 800 kbps, 640x360
-   - Phân đoạn video thành các file `.ts` dài 4 giây và tạo playlist con tương ứng.
-6. **Sinh Master Playlist (`master.m3u8`)**: Ghép nối các dải bitrate theo chuẩn HLS RFC 8216 để trình phát (Player) tự động chuyển đổi chất lượng theo tốc độ mạng của người xem.
-7. **Upload lên S3 Processed Bucket**: Đẩy toàn bộ playlist và segment `.ts` lên S3 với đúng định dạng MIME type và thiết lập cache control.
-8. **Cập nhật Database & Dọn dẹp**: Cập nhật trạng thái `READY` lên DynamoDB và xóa file tạm giải phóng ổ đĩa.
+   | Profile | Cạnh ngắn | Video bitrate |
+   | --- | --- | --- |
+   | 1080p | 1080 px | 4500 kbps |
+   | 720p | 720 px | 2500 kbps |
+   | 480p | 480 px | 1200 kbps |
+   | 360p | 360 px | 800 kbps |
 
----
+   Output dùng H.264 (yuv420p) và AAC, chia segment `.ts` dài 4 giây, keyframe mỗi 2 giây theo fps thật của nguồn.
+6. Ghi `master.m3u8` liệt kê các rendition với độ phân giải thật, để player tự đổi chất lượng theo tốc độ mạng.
+7. Upload playlist, segment và thumbnail lên bucket processed. Playlist đặt `no-cache`, segment được cache một năm.
+8. Cập nhật DynamoDB sang `READY`, xoá message khỏi queue và dọn thư mục tạm.
 
-## 🚀 Hướng dẫn Chạy Worker
+Nếu một bước lỗi, video bị đánh dấu `FAILED` và message được giữ lại để SQS thử lại. Sau 3 lần thất bại, message chuyển sang DLQ.
 
-### 1. Cài đặt dependencies
+## Chạy
+
 ```bash
 cd src/transcode-worker
 npm install
+npm test        # kiểm tra binary FFmpeg, chọn profile, master playlist
+npm run dev     # hoặc npm start
 ```
 
-### 2. Chạy Unit Test kiểm tra FFmpeg
-```bash
-npm test
-```
-
-### 3. Khởi động Worker
-```bash
-npm start
-# Hoặc chế độ dev tự reload khi đổi code:
-npm run dev
-```
+Các biến môi trường riêng của worker (đều không bắt buộc): `SQS_POLLING_WAIT_TIME` (mặc định 10), `SQS_MAX_MESSAGES` (1), `SQS_VISIBILITY_TIMEOUT` (300), `SQS_HEARTBEAT_INTERVAL` (120, phải nhỏ hơn visibility timeout).
