@@ -43,8 +43,10 @@ export async function createVideoRecord(videoData) {
  * @param {string} videoId
  * @param {string} status 'PROCESSING' | 'READY' | 'FAILED'
  * @param {Object} extraFields (qualities, masterPlaylistUrl, duration, errorMessage...)
+ * @param {{ expectedStatus?: string }} options Nếu có expectedStatus, chỉ cập nhật khi status hiện tại khớp
+ *   (ngược lại DynamoDB ném ConditionalCheckFailedException)
  */
-export async function updateVideoStatus(videoId, status, extraFields = {}) {
+export async function updateVideoStatus(videoId, status, extraFields = {}, options = {}) {
   const timestamp = new Date().toISOString();
 
   const updateExpParts = ['#status = :status', '#updatedAt = :updatedAt'];
@@ -65,6 +67,12 @@ export async function updateVideoStatus(videoId, status, extraFields = {}) {
     }
   }
 
+  let conditionExpression;
+  if (options.expectedStatus) {
+    conditionExpression = 'attribute_exists(videoId) AND #status = :expectedStatus';
+    expAttrValues[':expectedStatus'] = options.expectedStatus;
+  }
+
   const response = await docClient.send(
     new UpdateCommand({
       TableName: config.videosTable,
@@ -72,6 +80,7 @@ export async function updateVideoStatus(videoId, status, extraFields = {}) {
       UpdateExpression: `SET ${updateExpParts.join(', ')}`,
       ExpressionAttributeNames: expAttrNames,
       ExpressionAttributeValues: expAttrValues,
+      ...(conditionExpression ? { ConditionExpression: conditionExpression } : {}),
       ReturnValues: 'ALL_NEW',
     })
   );

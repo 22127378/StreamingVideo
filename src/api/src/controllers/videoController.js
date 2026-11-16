@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { generateUploadPresignedUrl } from '../services/s3Service.js';
+import { generateUploadPresignedUrl, checkFileExistsOnS3 } from '../services/s3Service.js';
 import {
   createVideoRecord,
   updateVideoStatus,
@@ -87,18 +87,59 @@ export async function completeUpload(req, res, next) {
       });
     }
 
-    // 2. Cập nhật trạng thái PROCESSING
-    const updatedVideo = await updateVideoStatus(videoId, 'PROCESSING');
+    // 2. Chỉ cho phép hoàn tất khi video đang ở trạng thái UPLOADING (chống gọi lặp)
+    if (video.status !== 'UPLOADING') {
+      return res.status(409).json({
+        success: false,
+        message: `Video đã ở trạng thái ${video.status}, không thể xác nhận upload lại`,
+        currentStatus: video.status,
+      });
+    }
 
-    // 3. Gửi job vào SQS Queue cho FFmpeg Worker
-    const sqsResult = await sendTranscodeJob({
-      videoId: video.videoId,
-      title: video.title,
-      rawBucket: video.rawBucket,
-      rawS3Key: video.rawS3Key,
-      processedBucket: video.processedBucket,
-      targetResolutions: ['1080p', '720p', '480p', '360p'],
-    });
+    // 3. Xác nhận file gốc thực sự đã nằm trên S3
+    const fileCheck = await checkFileExistsOnS3(video.rawBucket, video.rawS3Key);
+    if (fileCheck.error) {
+      return res.status(502).json({
+        success: false,
+        message: 'Không kiểm tra được file trên S3. Vui lòng thử lại sau.',
+        error: fileCheck.error,
+      });
+    }
+    if (!fileCheck.exists) {
+      return res.status(400).json({
+        success: false,
+        message: 'File video chưa được upload lên S3. Hãy PUT file vào uploadUrl trước khi gọi /complete.',
+        s3Key: video.rawS3Key,
+      });
+    }
+
+    // 4. Cập nhật PROCESSING có điều kiện: nếu 2 request đến cùng lúc thì chỉ 1 request thắng
+    //    (request thua nhận ConditionalCheckFailedException -> 409 qua errorHandler)
+    const updatedVideo = await updateVideoStatus(
+      videoId,
+      'PROCESSING',
+      { fileSize: fileCheck.contentLength },
+      { expectedStatus: 'UPLOADING' }
+    );
+
+    // 5. Gửi job vào SQS Queue cho FFmpeg Worker
+    let sqsResult;
+    try {
+      sqsResult = await sendTranscodeJob({
+        videoId: video.videoId,
+        title: video.title,
+        rawBucket: video.rawBucket,
+        rawS3Key: video.rawS3Key,
+        processedBucket: video.processedBucket,
+        targetResolutions: ['1080p', '720p', '480p', '360p'],
+      });
+    } catch (sqsError) {
+      // Trả về UPLOADING để client có thể gọi /complete lại, tránh video kẹt ở PROCESSING
+      await updateVideoStatus(videoId, 'UPLOADING', {}, { expectedStatus: 'PROCESSING' }).catch((e) =>
+        console.error(`[completeUpload] Không rollback được status của ${videoId}:`, e.message)
+      );
+      throw sqsError;
+    }
 
     res.status(200).json({
       success: true,

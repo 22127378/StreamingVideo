@@ -18,6 +18,14 @@ export function errorHandler(err, req, res, next) {
     });
   }
 
+  // Cập nhật có điều kiện thất bại (ví dụ 2 request /complete đồng thời)
+  if (err.name === 'ConditionalCheckFailedException') {
+    return res.status(409).json({
+      success: false,
+      message: 'Trạng thái video đã thay đổi bởi một request khác (Conflict)',
+    });
+  }
+
   // Xử lý lỗi AWS SDK
   if (err.name?.startsWith('ResourceNotFound') || err.name === 'NoSuchBucket') {
     return res.status(502).json({
