@@ -110,7 +110,7 @@ export function authErrorMessage(err) {
     case 'ExpiredCodeException':
       return 'Mã xác minh đã hết hạn. Gửi lại mã mới.';
     case 'InvalidPasswordException':
-      return 'Mật khẩu cần ít nhất 8 ký tự, gồm chữ thường và chữ số.';
+      return 'Mật khẩu cần ít nhất 8 ký tự.';
     case 'LimitExceededException':
     case 'TooManyRequestsException':
       return 'Thử quá nhiều lần. Chờ vài phút rồi thử lại.';

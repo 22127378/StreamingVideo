@@ -30,10 +30,12 @@ resource "aws_cognito_user_pool" "this" {
     case_sensitive = false
   }
 
+  # Nới để có tài khoản test dễ nhớ (theo yêu cầu): chỉ cần 8 ký tự, không bắt buộc chữ.
+  # Nên bật lại require_lowercase/require_numbers trước khi mở trang cho người dùng thật.
   password_policy {
     minimum_length                   = 8
-    require_lowercase                = true
-    require_numbers                  = true
+    require_lowercase                = false
+    require_numbers                  = false
     require_symbols                  = false
     require_uppercase                = false
     temporary_password_validity_days = 7
