@@ -81,12 +81,19 @@ log "Cluster resources (NodePools, IngressClass)"
 kubectl apply -f "$ROOT/k8s/cluster/"
 
 log "KEDA $KEDA_VERSION"
-helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
-helm repo update kedacore >/dev/null
-helm upgrade --install keda kedacore/keda --version "$KEDA_VERSION" \
-  --namespace keda --create-namespace --wait --timeout 10m \
-  --set podIdentity.aws.irsa.enabled=false \
-  --set prometheus.operator.enabled=true
+# helm upgrade --wait mất vài phút kể cả khi không đổi gì, nên bỏ qua nếu đã đúng phiên bản.
+# FORCE_KEDA=1 để cài lại, ví dụ khi đổi các --set bên dưới.
+installed_keda=$(helm -n keda list --filter '^keda$' --deployed -o json 2>/dev/null | jq -r '.[0].chart // empty')
+if [[ "$installed_keda" == "keda-$KEDA_VERSION" && -z "${FORCE_KEDA:-}" ]]; then
+  echo "keda-$KEDA_VERSION already deployed, skipping (FORCE_KEDA=1 to reinstall)"
+else
+  helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
+  helm repo update kedacore >/dev/null
+  helm upgrade --install keda kedacore/keda --version "$KEDA_VERSION" \
+    --namespace keda --create-namespace --wait --timeout 10m \
+    --set podIdentity.aws.irsa.enabled=false \
+    --set prometheus.operator.enabled=true
+fi
 
 log "Namespace and secrets"
 kubectl apply -f "$ROOT/k8s/app/base/namespace.yaml"
