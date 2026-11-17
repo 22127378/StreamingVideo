@@ -13,7 +13,7 @@ function formatDuration(seconds) {
   return `${m}:${s}`;
 }
 
-export default function VideoList({ videos, selectedId, onSelect, onDelete, onLoadMore, hasMore, loading }) {
+export default function VideoList({ videos, selectedId, onSelect, onDelete, canDelete, onLoadMore, hasMore, loading }) {
   if (!loading && videos.length === 0) {
     return <p className="empty">Chưa có video nào. Upload video đầu tiên ở bên trái.</p>;
   }
@@ -52,24 +52,26 @@ export default function VideoList({ videos, selectedId, onSelect, onDelete, onLo
                 </p>
                 {v.status === 'FAILED' && v.errorMessage && <p className="error-text">{v.errorMessage}</p>}
               </div>
-              <button
-                className="icon-button"
-                onClick={() => onDelete(v)}
-                disabled={v.status === 'PROCESSING' || v.status === 'DELETING'}
-                title={v.status === 'PROCESSING' ? 'Không xoá được khi đang xử lý' : 'Xoá video'}
-                aria-label={`Xoá ${v.title}`}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                  <path
-                    d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
+              {canDelete(v) && (
+                <button
+                  className="icon-button"
+                  onClick={() => onDelete(v)}
+                  disabled={v.status === 'PROCESSING' || v.status === 'DELETING'}
+                  title={v.status === 'PROCESSING' ? 'Không xoá được khi đang xử lý' : 'Xoá video'}
+                  aria-label={`Xoá ${v.title}`}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path
+                      d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
             </li>
           );
         })}

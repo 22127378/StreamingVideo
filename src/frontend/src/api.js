@@ -1,4 +1,5 @@
 // Gọi API StreamForge. Frontend và API cùng domain (CloudFront /api/*, hoặc proxy của Vite khi dev).
+import { getAccessToken } from './auth.js';
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -8,7 +9,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, { body, token } = {}) {
+async function request(method, path, { body } = {}) {
+  const token = await getAccessToken();
   const res = await fetch(`/api${path}`, {
     method,
     headers: {
@@ -42,11 +44,17 @@ export const requestUpload = ({ file, title, tier }) =>
 
 export const completeUpload = (videoId) => request('POST', '/videos/complete', { body: { videoId } });
 
-export const issuePlaybackToken = ({ userId, tier, videoId }) =>
-  request('POST', '/auth/playback-token', { body: { userId, tier, videoId } });
+/**
+ * Xin quyền xem: API kiểm tra gói rồi đặt CloudFront signed cookies cho /videos/{id}/.
+ * Sau đó trình phát tải HLS bình thường, trình duyệt tự gửi cookie (cùng domain).
+ */
+export const startPlayback = (id) => request('POST', `/videos/${id}/playback`);
 
-export const verifyPlayback = ({ token, videoId }) =>
-  request('POST', '/auth/verify-playback', { body: { videoId }, token });
+export const getMe = () => request('GET', '/auth/me');
+
+export const upgradeToPremium = () => request('POST', '/auth/upgrade');
+
+export const devLogin = ({ email, tier }) => request('POST', '/auth/dev-login', { body: { email, tier } });
 
 /**
  * PUT file lên presigned URL của S3, báo tiến trình qua onProgress(0..1).

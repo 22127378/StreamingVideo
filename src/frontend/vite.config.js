@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react';
 // Khi deploy, frontend và API cùng nằm sau một CloudFront nên /api là cùng domain.
 export default defineConfig({
   plugins: [react()],
+  // amazon-cognito-identity-js dùng biến global của Node
+  define: { global: 'globalThis' },
   server: {
     port: 5173,
     proxy: {

@@ -62,7 +62,13 @@ export default function Uploader({ onUploaded }) {
       onUploaded?.(data.videoId);
     } catch (err) {
       setPhase('error');
-      setMessage(err.status === 429 ? 'Bạn upload quá nhiều, thử lại sau ít phút.' : err.message);
+      setMessage(
+        err.status === 429
+          ? 'Bạn upload quá nhiều, thử lại sau ít phút.'
+          : err.status === 401
+            ? 'Phiên đăng nhập hết hạn, hãy đăng nhập lại.'
+            : err.message
+      );
     }
   };
 
