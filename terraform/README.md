@@ -5,12 +5,15 @@ Hạ tầng AWS cho StreamForge, chia thành các layer áp dụng độc lập 
 | Layer | Tạo gì | Phụ thuộc | Chi phí khi không có traffic |
 | --- | --- | --- | --- |
 | `backend` | Bucket chứa state (versioning, mã hoá KMS, chỉ cho TLS) và AWS Budget alarm | Không. State của layer này nằm trên máy | ~$1/tháng (KMS) |
-| `storage` | Bucket `raw` và `processed` (CloudFront đọc qua OAC), bảng DynamoDB `videos` với GSI `entityType-createdAt-index` | `backend` | Gần 0 |
+| `storage` | Bucket `raw` và `processed` (CloudFront đọc qua OAC), bảng DynamoDB `videos` cũ (dữ liệu đã chuyển sang Aurora, sẽ gỡ) | `backend` | Gần 0 |
 | `messaging` | SQS `transcode` và DLQ (`maxReceiveCount` 3, visibility 300s) | `backend` | Gần 0 |
 | `identity` | IAM policy tối thiểu quyền cho API và worker, cộng hai dev role | `storage`, `messaging` | 0 |
 | `networking` | VPC 2 AZ, subnet public/private, 1 NAT gateway | `backend` | ~$33/tháng (NAT) |
 | `compute` | EKS Auto Mode, ECR, security group ALB chỉ mở cho CloudFront, Pod Identity cho API, worker và KEDA | `networking`, `identity` | ~$73/tháng (control plane) cộng node |
-| `delivery` | Bucket `web` cho frontend và CloudFront: `/` là frontend, `/api/*` tới ALB, `/videos/*` là HLS từ bucket `processed` (CloudFront Function bỏ tiền tố `/videos`). `PriceClass_200` để có edge ở châu Á | `compute` và Ingress của API | Gần 0, tính theo traffic |
+| `auth` | Cognito user pool (tier LITE), app client cho SRP, group `premium` và `admin`. Mật khẩu tối thiểu 8 ký tự | `compute` | Miễn phí tới 10.000 user/tháng |
+| `database` | Aurora PostgreSQL 17 Serverless v2 (0.5 đến 4 ACU), bắt buộc TLS, IAM auth cho user `streamforge_api` và `streamforge_worker`, mật khẩu master trong Secrets Manager | `networking`, `compute` | ~$45/tháng (0.5 ACU luôn chạy) cộng storage |
+| `observability` | SNS topic gửi email cảnh báo, bucket Loki, Pod Identity cho Loki, Alertmanager và Grafana, log CloudFront vào CloudWatch, alarm DLQ, queue bị kẹt và CloudFront 5xx (gửi qua EventBridge để email dễ đọc) | `compute`, `delivery` | Vài USD/tháng |
+| `delivery` | Bucket `web` cho frontend và CloudFront: `/` là frontend, `/api/*` và `/grafana*` tới ALB, `/videos/*` là HLS từ bucket `processed` (CloudFront Function bỏ tiền tố `/videos`), cần signed cookie từ key group. Thumbnail để public. `PriceClass_200` để có edge ở châu Á | `compute` và Ingress của API | Gần 0, tính theo traffic |
 
 Ứng dụng chạy trên EKS được deploy bằng `k8s/deploy.sh` (xem mục "Deploy ứng dụng" bên dưới).
 
@@ -21,7 +24,7 @@ Tên tài nguyên theo dạng `streamforge-<environment>-...`, bucket có thêm 
 ## Yêu cầu
 
 - Terraform 1.10 trở lên.
-- AWS credentials có quyền tạo S3, KMS, DynamoDB, SQS, IAM và Budgets (ví dụ chạy `aws login`).
+- AWS credentials có quyền tạo S3, KMS, SQS, IAM, Budgets, EKS, RDS, Cognito, CloudFront và CloudWatch (ví dụ chạy `aws login`).
 
 ## Áp dụng lần đầu
 
@@ -70,7 +73,11 @@ for layer in networking compute; do
   (cd terraform/layers/$layer && terraform init -backend-config=../../backend.hcl && terraform apply)
 done
 
-./k8s/deploy.sh      # build + push image lên ECR, NodePool, KEDA, API, worker; in ra DNS của ALB
+for layer in auth database; do
+  (cd terraform/layers/$layer && terraform init -backend-config=../../backend.hcl && terraform apply)
+done
+
+./k8s/deploy.sh      # build + push image lên ECR, NodePool, KEDA, migrate DB, API, worker; in ra DNS của ALB
 
 cd terraform/layers/delivery
 terraform init -backend-config=../../backend.hcl
@@ -78,15 +85,22 @@ terraform apply -var "api_alb_dns_name=<DNS của ALB>"
 cd -
 SKIP_BUILD=1 ./k8s/deploy.sh    # trỏ CDN_BASE_URL sang CloudFront
 ./src/frontend/deploy.sh        # build và đẩy frontend lên bucket web
+
+(cd terraform/layers/observability && terraform init -backend-config=../../backend.hcl && terraform apply)
+./k8s/monitoring/install.sh     # Prometheus, Loki, Alloy, Grafana tại /grafana
 ```
+
+Layer `delivery` và `observability` đọc nhau qua biến trong `terraform.tfvars` (DNS của ALB, ID của distribution), không đọc state của nhau.
 
 Sau đó frontend nằm ở `https://<cloudfront-domain>/`, API ở `https://<cloudfront-domain>/api/...` và link phát HLS ở `https://<cloudfront-domain>/videos/<videoId>/master.m3u8`.
 
 - Pod: API (2 replica) chạy trên NodePool `streamforge-app` gồm node on-demand t3/t3a. Worker chạy trên NodePool `streamforge-transcode` gồm node Spot, có taint riêng.
-- KEDA đọc độ dài queue và co giãn worker từ 0 đến 4 pod. Khi không có job, node Spot bị thu hồi sau 2 phút.
+- KEDA đọc độ dài queue và co giãn worker từ 1 đến 4 pod. Một worker luôn chạy sẵn để không phải chờ node Spot khởi động; đặt `WORKER_MIN_REPLICAS=0` khi chạy `deploy.sh` để co về 0 và tiết kiệm khoảng $22/tháng.
+- Mỗi lần deploy chạy Job `streamforge-db-migrate`: áp file trong `src/api/src/db/migrations`, tạo hai user IAM cho API và worker. Xem log bằng `kubectl -n streamforge logs job/streamforge-db-migrate`.
+- `deploy.sh` bỏ qua bước cài KEDA nếu bản đang chạy đã đúng phiên bản. Đặt `FORCE_KEDA=1` để cài lại (ví dụ khi đổi value của chart).
 - Nếu `aws login` không dùng được cho backend S3 của Terraform, dùng một profile có `credential_process = aws configure export-credentials --format process`.
 
-Tắt hẳn để không tốn tiền: `terraform destroy` lần lượt các layer `delivery`, `compute`, `networking`. Trước khi destroy `compute`, xoá Ingress (`kubectl delete ns streamforge`) để ALB do Kubernetes tạo được gỡ trước. Các layer còn lại gần như không tốn tiền nên có thể giữ.
+Tắt hẳn để không tốn tiền: `terraform destroy` lần lượt các layer `observability`, `delivery`, `database`, `auth`, `compute`, `networking`. Aurora tạo snapshot cuối trước khi xoá. Trước khi destroy `compute`, xoá Ingress (`kubectl delete ns streamforge`) để ALB do Kubernetes tạo được gỡ trước. Các layer còn lại gần như không tốn tiền nên có thể giữ.
 
 ## Kiểm tra trước khi áp dụng
 

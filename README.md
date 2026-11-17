@@ -2,20 +2,21 @@
 
 A video streaming platform on AWS EKS. Personal project, June to August 2026.
 
-Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. Transcode workers scale to zero on an empty queue and run on Spot, delivery is GitOps with ArgoCD, and there are no long-lived AWS keys anywhere. The EKS control plane and NAT gateway still cost roughly $105 a month while the cluster exists, so the cluster is meant to be created for demos and destroyed afterwards.
+Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. Transcode workers scale on queue depth and run on Spot, premium videos are protected with CloudFront signed cookies, and no pod holds long-lived AWS keys. The EKS control plane and NAT gateway alone cost roughly $105 a month while the cluster exists, so the cluster is meant to be created for demos and destroyed afterwards.
 
 ## Current state
 
 What exists in this repo today:
 
-- A local AWS stack on LocalStack (S3, SQS with a dead letter queue, DynamoDB), started with Docker Compose.
-- `src/api`: an Express REST API that issues S3 presigned upload URLs, tracks video metadata in DynamoDB, queues transcode jobs on SQS, and issues JWT playback tokens for free and premium tiers.
+- A local stack in Docker Compose: LocalStack (S3, SQS with a dead letter queue) and PostgreSQL.
+- `src/api`: an Express REST API that issues S3 presigned upload URLs, stores video metadata in PostgreSQL (Aurora Serverless v2 on AWS), queues transcode jobs on SQS, signs users in with Cognito and hands out CloudFront signed cookies scoped to one video.
 - `src/transcode-worker`: an SQS consumer that downloads the source video, probes it, generates a thumbnail, transcodes up to four HLS renditions (1080p, 720p, 480p, 360p), writes a master playlist, uploads everything to the processed bucket and marks the video `READY`.
 - Dockerfiles for both services in `docker/`, and a GitHub Actions workflow that runs the tests, builds both images and fails on fixable HIGH or CRITICAL vulnerabilities reported by Trivy.
 
-- `src/frontend`: a React page to upload videos with progress, watch transcode status, play HLS with a quality selector and simulate free or premium playback. It is served from the same CloudFront domain as the API (`/api/*`) and the HLS output (`/videos/*`).
+- `src/frontend`: a React app with in-page Cognito sign-in, uploads with progress, transcode status and an HLS player with a quality selector. It is served from the same CloudFront domain as the API (`/api/*`), the HLS output (`/videos/*`) and Grafana (`/grafana`).
+- Monitoring on the cluster: Prometheus, Loki, Alloy and Grafana, with alerts sent by email through SNS (`k8s/monitoring/`).
 
-Not built yet: CloudFront signed cookies, a custom domain, ArgoCD and the deploy half of CI/CD.
+Not built yet: a custom domain, ArgoCD with Argo Rollouts, and the deploy half of CI/CD (deploys run from `k8s/deploy.sh`).
 
 ## Running locally
 
@@ -31,10 +32,11 @@ Or LocalStack in Docker and the services with npm, which reloads on code changes
 
 ```bash
 cp .env.example .env
-docker compose up -d                # LocalStack only; buckets, queues and table are created on startup
+docker compose up -d                # LocalStack and PostgreSQL; buckets and queues are created on startup
 ./scripts/verify-local.sh           # or scripts/verify-local.ps1 on Windows
 
-cd src/api && npm install && npm run dev                 # http://localhost:4000
+cd src/api && npm install && node src/db/migrate.js     # schema and DB users, once
+npm run dev                                              # http://localhost:4000
 cd src/transcode-worker && npm install && npm run dev    # in a second terminal
 ```
 
@@ -77,7 +79,7 @@ LocalStack is pinned to 4.4 because later images refuse to start without a `LOCA
 │  └─────────┘    └─────────────┘    └──────┘    └──────────────┘ │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │                    DynamoDB (Metadata)                      │  │
+│  │           Aurora PostgreSQL Serverless v2 (Metadata)        │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -91,16 +93,16 @@ In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally
 | Layer | Technology |
 | --- | --- |
 | Container orchestration | AWS EKS |
-| Infrastructure | Terraform (10 modules, 5 layers) |
+| Infrastructure | Terraform (6 modules, 10 layers) |
 | Networking | VPC, CloudFront, ALB |
-| Storage | S3 for video assets and Terraform state, DynamoDB |
+| Storage | S3 for video assets and Terraform state, Aurora PostgreSQL Serverless v2 |
 | Messaging | EventBridge, SQS, DLQ |
 | Transcoding | FFmpeg on Spot instances |
 | Autoscaling | KEDA, scaling to zero on queue depth |
 | GitOps | ArgoCD with a separate config repo |
 | CI/CD | GitHub Actions, Argo Rollouts |
-| Monitoring and scanning | Prometheus, Trivy |
-| Security | GitHub OIDC, IRSA, CloudFront signed cookies, KMS |
+| Monitoring and scanning | Prometheus, Loki, Alloy, Grafana, CloudWatch alarms, Trivy |
+| Security | Cognito, EKS Pod Identity, IAM database auth, CloudFront signed cookies, KMS |
 
 ## Infrastructure
 
@@ -109,14 +111,17 @@ Terraform lives in `terraform/`, split into layers that are applied separately. 
 | Layer | Status | Contents |
 | --- | --- | --- |
 | backend | Built | State bucket (versioned, KMS-encrypted, TLS only), AWS Budget alarm |
-| storage | Built | Raw and processed S3 buckets, DynamoDB `videos` table with its GSI |
+| storage | Built | Raw and processed S3 buckets. The old DynamoDB `videos` table is still here until it is removed |
 | messaging | Built | Transcode SQS queue and DLQ |
 | identity | Built | Least-privilege IAM policies for the API and worker, plus dev roles |
 | networking | Built | VPC across 2 AZs, public and private subnets, one NAT gateway |
 | compute | Built | EKS Auto Mode, ECR, EKS Pod Identity roles using the identity policies, ALB security group open to CloudFront only |
-| delivery | Built | CloudFront: HLS from the processed bucket via OAC, `/api/*` to the ALB. Signed cookies not done yet |
+| delivery | Built | CloudFront: frontend bucket, HLS from the processed bucket via OAC behind a signed-cookie key group, `/api/*` and `/grafana*` to the ALB |
+| auth | Built | Cognito user pool, app client and the `premium` and `admin` groups |
+| database | Built | Aurora PostgreSQL 17 Serverless v2 (0.5 ACU minimum), IAM auth for the API and worker, master secret in Secrets Manager |
+| observability | Built | SNS alert topic, Loki bucket, Pod Identity for Loki, Alertmanager and Grafana, CloudWatch alarms on the DLQ, stuck queue and CloudFront 5xx |
 
-The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA scaling the worker from 0 on queue depth, and `k8s/deploy.sh` to build, push and apply. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and EKS Pod Identity replaces IRSA. ArgoCD is not set up yet.
+The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA scaling the worker on queue depth (one worker kept warm to avoid cold starts), a migration Job for the database, and `k8s/deploy.sh` to build, push and apply. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and EKS Pod Identity replaces IRSA. ArgoCD is not set up yet.
 
 EventBridge is left out for now. The API already queues a job when the client calls `/api/videos/complete`, so adding an S3 → EventBridge → SQS rule on top would transcode every video twice.
 
@@ -162,7 +167,9 @@ GitHub Push → GitHub Actions → Build & Test → Trivy Scan → Push Image �
 | Concern | Approach |
 | --- | --- |
 | CI/CD authentication | GitHub OIDC, so CI holds no static AWS keys |
-| Pod permissions | IRSA, one least-privilege IAM role per service |
+| Pod permissions | EKS Pod Identity, one least-privilege IAM role per service |
+| User sign-in | Cognito with SRP, so the password is never sent as plain text |
+| Database access | IAM auth tokens instead of stored passwords, TLS required |
 | Container scanning | Trivy in CI blocks images with known CVEs |
 | Origin access | The ALB only accepts traffic from CloudFront |
 | Content protection | Short-lived CloudFront signed cookies per tier |
@@ -171,70 +178,54 @@ GitHub Push → GitHub Actions → Build & Test → Trivy Scan → Push Image �
 ```
 GitHub Actions (OIDC) ──▶ AWS STS ──▶ Temporary Credentials
                                           │
-EKS Pod (IRSA) ─────────▶ AWS STS ──▶ Per-service IAM Role
+EKS Pod (Pod Identity) ─▶ AWS STS ──▶ Per-service IAM Role
                                           │
 User ──▶ CloudFront (Signed Cookie) ──▶ ALB ──▶ EKS
               │
               └── Short-lived, tier-gated access
 ```
 
-Locally, the API simulates tier-gated playback with JWTs signed by `JWT_SECRET`. Anyone can request a premium token, so this is for development only.
+On AWS, the API checks the user's Cognito groups and sets three CloudFront cookies limited to `/videos/<id>/` for two hours. Free users get cookies only for free videos; `premium` and `admin` users get them for every video. Locally there is no Cognito, so `/api/auth/dev-login` issues a JWT signed by `JWT_SECRET` for any email and tier. That mode is for development only.
 
-## Deploying to AWS (planned)
+## Deploying to AWS
 
-Requirements: AWS CLI v2, Terraform 1.5 or newer, kubectl, Helm 3, the ArgoCD CLI and Docker.
+Requirements: AWS CLI v2, Terraform 1.10 or newer, kubectl, Helm 3 and Docker. The step-by-step guide, including apply order and teardown, is in `terraform/README.md`. In short:
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/<your-username>/streamforge.git
-cd streamforge
+# Terraform layers, in order
+backend -> storage -> messaging -> identity -> networking -> compute
+        -> auth -> database -> observability -> delivery
 
-# 2. Initialize Terraform backend (Layer 5 first)
-cd terraform/layers/backend
-terraform init && terraform apply
-
-# 3. Provision infrastructure layer by layer
-cd ../networking && terraform init && terraform apply
-cd ../compute    && terraform init && terraform apply
-cd ../storage    && terraform init && terraform apply
-cd ../messaging  && terraform init && terraform apply
-
-# 4. Configure kubectl
-aws eks update-kubeconfig --name streamforge-cluster --region <region>
-
-# 5. Install ArgoCD
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
-# 6. Deploy application via ArgoCD
-argocd app create streamforge \
-  --repo https://github.com/<your-username>/streamforge-config.git \
-  --path k8s/ \
-  --dest-server https://kubernetes.default.svc \
-  --dest-namespace default
+./k8s/deploy.sh              # images, KEDA, DB migration, API and worker
+./k8s/monitoring/install.sh  # Prometheus, Loki, Alloy, Grafana
+./src/frontend/deploy.sh     # build the frontend and upload it to the web bucket
+BASE_URL=https://<cloudfront-domain> ./tests/e2e/smoke.sh
 ```
 
 ## Project structure
 
 ```
 streamforge/
-├── docker-compose.yml            # LocalStack, plus API and worker with --profile app
+├── docker-compose.yml            # LocalStack and PostgreSQL, plus API and worker with --profile app
 ├── docker/                       # api.Dockerfile, worker.Dockerfile
-├── docs/architecture.drawio      # Local flow and AWS design diagrams
+├── docs/                         # architecture.drawio, test-plan.md
 ├── scripts/                      # LocalStack init and verify scripts
 ├── src/
-│   ├── api/                      # REST API
+│   ├── api/                      # REST API, database migrations in src/db
 │   ├── transcode-worker/         # FFmpeg transcoding worker
-│   └── frontend/                 # Video player and UI (not built yet)
+│   └── frontend/                 # React app
+├── k8s/
+│   ├── cluster/                  # NodePools, IngressClass, StorageClass
+│   ├── app/                      # API, worker, KEDA ScaledObject, Ingress
+│   ├── db/                       # Migration Job
+│   ├── monitoring/               # Helm values, alert rules, Grafana dashboard
+│   └── deploy.sh
+├── tests/                        # e2e smoke test, k6 load tests
 ├── .github/workflows/ci.yml      # Tests, image build, Trivy scan, Terraform checks
-├── terraform/
-│   ├── modules/                  # backend, budget, s3, sqs, dynamodb, app-iam
-│   └── layers/                   # backend, storage, messaging, identity
-│
-│   Planned:
-├── terraform/layers/             # networking, compute, delivery
-├── k8s/                          # deployments, services, keda, rollouts
-└── .github/workflows/cd.yml      # Push to ECR via OIDC, update the config repo
+└── terraform/
+    ├── modules/                  # backend, budget, s3, sqs, dynamodb, app-iam
+    └── layers/                   # backend, storage, messaging, identity, networking,
+                                  # compute, auth, database, observability, delivery
 ```
 
 ## Contributing
