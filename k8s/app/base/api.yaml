@@ -35,14 +35,27 @@ spec:
             - configMapRef:
                 name: streamforge-config
           env:
+            - name: SERVICE_NAME
+              value: api
+            # User DB của API (SELECT/INSERT/UPDATE/DELETE trên videos), đăng nhập bằng token IAM
+            - name: DB_USER
+              value: streamforge_api
             # CloudFront + ALB đứng trước API
             - name: TRUST_PROXY_HOPS
               value: "2"
+            # Chỉ dùng ở chế độ dev auth; với Cognito thì API không ký token
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: streamforge-secrets
                   key: JWT_SECRET
+            # Ký CloudFront signed cookies cho /videos/*
+            - name: CLOUDFRONT_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: streamforge-cloudfront
+                  key: private_key
+                  optional: true
           resources:
             requests:
               cpu: 100m
@@ -89,6 +102,9 @@ kind: Service
 metadata:
   name: streamforge-api
   namespace: streamforge
+  labels:
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn Service theo nhãn này
+    app: streamforge-api
 spec:
   selector:
     app: streamforge-api

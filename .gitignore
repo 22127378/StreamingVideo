@@ -48,3 +48,8 @@ tests/load/results/
 
 # Báo cáo hệ thống chỉ để tham khảo trên máy
 docs/BAO_CAO_HE_THONG.md
+
+# Dashboard Grafana sau khi install.sh thay placeholder
+k8s/monitoring/dashboards/.rendered.json
+# Overlay migration do k8s/deploy.sh sinh (chứa account ID)
+k8s/db/overlays/

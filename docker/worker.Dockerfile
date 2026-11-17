@@ -22,6 +22,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+# Chứng chỉ CA của RDS (Aurora): kết nối TLS kiểm tra chứng chỉ server
+ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/certs/rds-global-bundle.pem
 # Thư mục tạm cho file tải về và output HLS (src/services/sqsConsumer.js: TEMP_ROOT)
 RUN mkdir -p /app/temp && chown node:node /app/temp
 

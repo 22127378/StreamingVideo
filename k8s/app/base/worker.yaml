@@ -38,9 +38,19 @@ spec:
       containers:
         - name: worker
           image: streamforge-worker
+          ports:
+            # Prometheus scrape (PodMonitor ở k8s/monitoring/app-monitors.yaml)
+            - name: metrics
+              containerPort: 9464
           envFrom:
             - configMapRef:
                 name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: worker
+            # User DB của worker (SELECT/UPDATE trên videos), đăng nhập bằng token IAM
+            - name: DB_USER
+              value: streamforge_worker
           resources:
             requests:
               cpu: 1500m
@@ -86,7 +96,9 @@ metadata:
 spec:
   scaleTargetRef:
     name: streamforge-worker
-  minReplicaCount: 0
+  # Provisioned: luôn giữ sẵn 1 worker (và 1 máy Spot) để job đầu tiên không phải chờ cấp máy
+  # (~55-75s khi từ 0). Overlay đặt lại theo WORKER_MIN_REPLICAS của k8s/deploy.sh; 0 = co về 0 khi rảnh.
+  minReplicaCount: 1
   maxReplicaCount: 4
   pollingInterval: 15
   cooldownPeriod: 120

@@ -5,6 +5,10 @@ metadata:
   name: alb
 spec:
   scheme: internet-facing
+  # Mọi Ingress lớp "alb" (API, Grafana) dùng chung một ALB. EKS Auto Mode khai báo nhóm ở đây;
+  # annotation alb.ingress.kubernetes.io/group.name bị bỏ qua.
+  group:
+    name: streamforge
 ---
 apiVersion: networking.k8s.io/v1
 kind: IngressClass

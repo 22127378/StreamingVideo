@@ -24,6 +24,48 @@ services:
     networks:
       - streamforge-network
 
+  # PostgreSQL thay Aurora khi chạy local (đăng nhập bằng mật khẩu thay vì IAM)
+  postgres:
+    container_name: streamforge-postgres
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: streamforge
+      POSTGRES_PASSWORD: streamforge
+      POSTGRES_DB: streamforge
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - streamforge-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - streamforge-network
+
+  # Schema và user DB cho API/worker (giống Job k8s/db/migrate-job.yaml trên EKS)
+  migrate:
+    profiles: ["app"]
+    container_name: streamforge-migrate
+    build:
+      context: ./src/api
+      dockerfile: ../../docker/api.Dockerfile
+    command: ["node", "src/db/migrate.js"]
+    environment: &db-env
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: streamforge
+      DB_SSL: "false"
+      DB_PASSWORD: streamforge
+      DB_MASTER_USER: streamforge
+      DB_MASTER_PASSWORD: streamforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - streamforge-network
+
   # API và worker chạy trong container: docker compose --profile app up -d --build
   # Không có profile thì chỉ LocalStack khởi động (để chạy API/worker bằng npm trên máy).
   api:
@@ -35,6 +77,8 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     environment: &app-env
+      <<: *db-env
+      DB_USER: streamforge_api
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
@@ -45,13 +89,16 @@ services:
       S3_RAW_UPLOADS_BUCKET: streamforge-raw-uploads
       S3_PROCESSED_BUCKET: streamforge-processed
       SQS_TRANSCODE_QUEUE_URL: http://localstack:4566/000000000000/streamforge-transcode-queue
-      DYNAMODB_VIDEOS_TABLE: streamforge-videos
       CDN_BASE_URL: http://localhost:4566/streamforge-processed
       # Image chạy NODE_ENV=production nên cần secret >= 32 ký tự. Chỉ dùng cho local.
       JWT_SECRET: local-compose-secret-not-for-production-use
+      # LocalStack không có Cognito: đăng nhập bằng email + chọn gói (POST /api/auth/dev-login)
+      ALLOW_DEV_AUTH: "true"
     depends_on:
       localstack:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - streamforge-network
 
@@ -61,12 +108,16 @@ services:
     build:
       context: ./src/transcode-worker
       dockerfile: ../../docker/worker.Dockerfile
-    environment: *app-env
+    environment:
+      <<: *app-env
+      DB_USER: streamforge_worker
     # Lớn hơn SHUTDOWN_GRACE_SECONDS (25s) để worker kịp trả message về queue
     stop_grace_period: 40s
     depends_on:
       localstack:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - streamforge-network
 
@@ -74,3 +125,6 @@ networks:
   streamforge-network:
     name: streamforge-network
     driver: bridge
+
+volumes:
+  streamforge-postgres:
