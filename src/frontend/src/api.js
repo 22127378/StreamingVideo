@@ -24,8 +24,20 @@ async function request(method, path, { body } = {}) {
   return data;
 }
 
-export const listVideos = ({ limit = 12, nextToken } = {}) =>
-  request('GET', `/videos?limit=${limit}${nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : ''}`);
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') q.set(k, v);
+  return q.toString();
+}
+
+/** Danh sách công khai. tier: free | premium; sort: newest | oldest | views | rating; period: day | week | month | year */
+export const listVideos = ({ limit = 12, nextToken, status, tier, sort, period } = {}) =>
+  request('GET', `/videos?${qs({ limit, nextToken, status, tier, sort, period })}`);
+
+/** Video của chính mình, mọi trạng thái */
+export const listMyVideos = ({ limit = 24, nextToken } = {}) => request('GET', `/videos/mine?${qs({ limit, nextToken })}`);
+
+export const rateVideo = (id, stars) => request('PUT', `/videos/${id}/rating`, { body: { stars } });
 
 export const getVideo = (id) => request('GET', `/videos/${id}`);
 

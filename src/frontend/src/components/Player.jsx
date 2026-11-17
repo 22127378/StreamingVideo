@@ -6,7 +6,11 @@ import Hls from 'hls.js/light';
  * Trình phát HLS. Dùng hls.js (có chọn chất lượng); trình duyệt không có MSE nhưng phát HLS
  * gốc (Safari trên iOS) thì gán thẳng src và để trình duyệt tự chọn chất lượng.
  */
-export default function Player({ src, poster }) {
+/**
+ * lockedQualities: các mức chất lượng gói hiện tại không xem được (ví dụ ['1080p'] với gói Free),
+ * hiện thành nút khoá để người dùng biết và nâng cấp.
+ */
+export default function Player({ src, poster, lockedQualities = [], onUpgrade }) {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const [levels, setLevels] = useState([]);
@@ -73,6 +77,11 @@ export default function Player({ src, poster }) {
                 {l.height}p
               </button>
             ))}
+          {lockedQualities.map((q) => (
+            <button key={q} className="locked" onClick={onUpgrade} title={`${q} dành cho gói Premium`}>
+              {q} <span className="lock-tag">Premium</span>
+            </button>
+          ))}
         </div>
       )}
     </div>
