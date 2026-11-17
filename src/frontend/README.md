@@ -1,9 +1,29 @@
 # StreamForge frontend
 
-Chưa có code. Phần này dự kiến làm ở Feature 4, gồm:
+Trang web một màn hình (React + Vite) để upload, theo dõi và xem video. Phát HLS bằng hls.js (bản light), có chọn chất lượng; trên Safari iOS dùng HLS của trình duyệt.
 
-- Upload video từ browser thẳng lên S3 qua presigned URL, có thanh tiến trình.
-- Theo dõi trạng thái transcode của từng video.
-- Trình phát HLS có chọn chất lượng (Auto, 1080p, 720p, 480p).
-- Mô phỏng phân quyền xem theo gói free và premium.
-- Giao diện tối.
+Chức năng:
+
+- Upload bằng kéo thả hoặc chọn file, có thanh tiến trình. File được PUT thẳng lên S3 qua presigned URL; kích thước và kiểu file đã được ký nên S3 từ chối file khác với lúc khai báo.
+- Thư viện video có trạng thái (chờ upload, đang xử lý, sẵn sàng, lỗi), tự làm mới mỗi 5 giây khi còn video đang xử lý, có nút "Xem thêm" để phân trang và nút xoá.
+- Chọn gói xem Free hoặc Premium ở góc trên để mô phỏng tài khoản. Trước khi phát, trang xin token theo gói rồi gọi `verify-playback`; video Premium với gói Free sẽ hiện thông báo khoá.
+
+## Chạy trên máy
+
+```bash
+cd src/frontend
+npm install
+npm run dev          # http://localhost:5173, /api chuyển tới http://localhost:4000
+```
+
+API phải đang chạy (`npm run dev` trong `src/api`, hoặc `docker compose --profile app up`). Đặt `API_URL` để trỏ `/api` tới chỗ khác. Bucket raw phải cho phép origin `http://localhost:5173` trong CORS (LocalStack đã mở sẵn).
+
+## Deploy
+
+```bash
+./src/frontend/deploy.sh
+```
+
+Script build rồi đồng bộ `dist/` lên bucket `web` của layer Terraform `delivery`: file trong `assets/` cache 1 năm (tên có hash), `index.html` để `no-cache`, sau đó invalidate `/index.html` trên CloudFront.
+
+Trang được phục vụ ở gốc domain CloudFront, cùng domain với API (`/api/*`) và HLS (`/videos/*`), nên không cần CORS cho API.
