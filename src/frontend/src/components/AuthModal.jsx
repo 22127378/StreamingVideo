@@ -143,7 +143,25 @@ export default function AuthModal({ onClose, onSignedIn }) {
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title" ref={dialogRef}>
+      <div className="auth-shell" role="dialog" aria-modal="true" aria-labelledby="auth-title" ref={dialogRef}>
+        <aside className="auth-hero" aria-hidden="true">
+          <div className="hero-tiles">
+            {Array.from({ length: 9 }, (_, i) => (
+              <span key={i} className={`tile t${i % 5}`} />
+            ))}
+          </div>
+          <div className="hero-copy">
+            <p className="hero-kicker">StreamForge</p>
+            <h3>Video của bạn, phát mượt ở mọi màn hình.</h3>
+            <ul>
+              <li>Upload tới 2 GB, tự chuyển sang 1080p, 720p, 480p, 360p</li>
+              <li>Phát qua CDN gần bạn, tự đổi chất lượng theo mạng</li>
+              <li>Gói Premium mở khoá toàn bộ thư viện</li>
+            </ul>
+          </div>
+        </aside>
+
+        <section className="auth-card">
         <button className="close" onClick={onClose} aria-label="Đóng">
           ×
         </button>
@@ -212,7 +230,7 @@ export default function AuthModal({ onClose, onSignedIn }) {
               {view === 'signup' && (
                 <PasswordInput value={confirm} onChange={setConfirm} autoComplete="new-password" label="Nhập lại mật khẩu" />
               )}
-              <p className="hint">Ít nhất 8 ký tự, gồm chữ thường và chữ số.</p>
+              <p className="hint">Ít nhất 8 ký tự.</p>
             </>
           )}
 
@@ -266,6 +284,7 @@ export default function AuthModal({ onClose, onSignedIn }) {
             </button>
           )}
         </div>
+        </section>
       </div>
     </div>
   );
