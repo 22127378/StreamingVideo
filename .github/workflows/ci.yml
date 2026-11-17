@@ -23,6 +23,21 @@ jobs:
     defaults:
       run:
         working-directory: src/${{ matrix.service }}
+    # PostgreSQL cho test tích hợp của API (tests/repository.test.js)
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: streamforge
+          POSTGRES_PASSWORD: streamforge
+          POSTGRES_DB: streamforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U streamforge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +57,8 @@ jobs:
         env:
           FFMPEG_PATH: /usr/bin/ffmpeg
           FFPROBE_PATH: /usr/bin/ffprobe
+          DB_TEST: ${{ matrix.service == 'api' && '1' || '' }}
+          DB_USER: streamforge_api
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=optional --audit-level=high
