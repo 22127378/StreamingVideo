@@ -42,3 +42,9 @@ terraform/backend.hcl
 
 # Overlay do k8s/deploy.sh sinh (chứa account ID)
 k8s/app/overlays/
+
+# Kết quả k6
+tests/load/results/
+
+# Báo cáo hệ thống chỉ để tham khảo trên máy
+docs/BAO_CAO_HE_THONG.md
