@@ -46,6 +46,26 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=optional --audit-level=high
 
+  frontend:
+    name: Build frontend
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
   terraform:
     name: Terraform fmt and validate
     runs-on: ubuntu-24.04
