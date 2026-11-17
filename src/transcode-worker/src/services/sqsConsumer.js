@@ -16,8 +16,9 @@ import {
   probeVideo,
   generateThumbnail,
   transcodeHLSVariant,
-  createMasterPlaylist,
   selectProfiles,
+  renditionDir,
+  writeMasterPlaylists,
 } from './ffmpegService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -207,13 +208,16 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     const successfulVariants = [];
     for (const profile of selectedProfiles) {
       signal?.throwIfAborted();
-      const variantResult = await transcodeHLSVariant(rawLocalPath, hlsOutputDir, profile, meta, { signal });
-      successfulVariants.push(variantResult);
+      const dir = renditionDir(profile);
+      const variantDir = path.join(hlsOutputDir, dir);
+      fs.mkdirSync(variantDir, { recursive: true });
+      const variantResult = await transcodeHLSVariant(rawLocalPath, variantDir, profile, meta, { signal });
+      successfulVariants.push({ ...variantResult, dir });
     }
 
-    // 7. Tạo Master Playlist (master.m3u8)
-    console.log('[Worker] Đang tạo master.m3u8...');
-    createMasterPlaylist(successfulVariants, hlsOutputDir);
+    // 7. Tạo master playlist: master.m3u8 (Premium, mọi biến thể) và sd/master.m3u8 (Free, tới 720p)
+    console.log('[Worker] Đang tạo master playlist...');
+    writeMasterPlaylists(successfulVariants, hlsOutputDir);
 
     // 8. Upload toàn bộ thư mục HLS lên S3 Processed Bucket
     await uploadDirectoryToS3(hlsOutputDir, processedBucket, videoId, { signal });
@@ -224,7 +228,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
       width: v.width,
       height: v.height,
       bitrate: v.profile.videoBitrate,
-      playlistUrl: `${config.cdnBaseUrl}/${videoId}/${v.playlist}`,
+      path: `${v.dir}/${v.playlist}`,
     }));
 
     await updateVideoStatus(videoId, 'READY', {

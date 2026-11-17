@@ -32,6 +32,16 @@ ffmpeg.setFfmpegPath(FFMPEG_BINARIES.ffmpeg);
 ffmpeg.setFfprobePath(FFMPEG_BINARIES.ffprobe);
 
 // Bảng cấu hình các profile độ phân giải và bitrate cho Adaptive Bitrate Streaming (HLS)
+// Gói Free xem tối đa 720p. Biến thể cao hơn nằm trong hd/, còn lại trong sd/, để CloudFront chặn
+// theo đường dẫn: cookie của gói Free chỉ mở /videos/{id}/sd/*, của Premium mở /videos/{id}/*.
+// Phải khớp FREE_MAX_HEIGHT trong src/api/src/services/playbackService.js.
+export const FREE_MAX_HEIGHT = 720;
+
+/** Thư mục con của một biến thể: 'hd' (chỉ Premium) hoặc 'sd' */
+export function renditionDir(profile) {
+  return profile.height > FREE_MAX_HEIGHT ? 'hd' : 'sd';
+}
+
 export const HLS_PROFILES = {
   '1080p': {
     name: '1080p',
@@ -303,12 +313,13 @@ export function transcodeHLSVariant(inputPath, outputDir, profile, meta, { signa
 }
 
 /**
- * Tạo file Master Playlist (master.m3u8) tổng hợp các biến thể phân giải
- * @param {Array} variants Danh sách các variant đã transcode thành công
+ * Tạo file Master Playlist tổng hợp các biến thể phân giải
+ * @param {Array} variants Các variant đã transcode. variant.dir (nếu có) được thêm vào trước tên playlist
  * @param {string} outputDir
- * @returns {string} Nội dung file master.m3u8
+ * @param {string} fileName
+ * @returns {string} Đường dẫn file master đã ghi
  */
-export function createMasterPlaylist(variants, outputDir) {
+export function createMasterPlaylist(variants, outputDir, fileName = 'master.m3u8') {
   let masterContent = '#EXTM3U\n#EXT-X-VERSION:3\n\n';
 
   for (const variant of variants) {
@@ -317,10 +328,24 @@ export function createMasterPlaylist(variants, outputDir) {
     const width = variant.width ?? profile.width;
     const height = variant.height ?? profile.height;
     masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=${profile.bandwidth},RESOLUTION=${width}x${height},NAME="${profile.name}"\n`;
-    masterContent += `${playlist}\n\n`;
+    masterContent += `${variant.dir ? `${variant.dir}/` : ''}${playlist}\n\n`;
   }
 
-  const masterPath = path.join(outputDir, 'master.m3u8');
+  fs.mkdirSync(outputDir, { recursive: true });
+  const masterPath = path.join(outputDir, fileName);
   fs.writeFileSync(masterPath, masterContent, 'utf-8');
   return masterPath;
+}
+
+/**
+ * Ghi 2 master playlist:
+ *   master.m3u8     mọi biến thể (Premium), trỏ tới sd/... và hd/...
+ *   sd/master.m3u8  chỉ biến thể tới 720p (Free), nằm trong sd/ nên cookie của gói Free đọc được
+ * @param {Array} variants Variant có trường dir ('sd' | 'hd')
+ * @param {string} rootDir Thư mục HLS của video
+ */
+export function writeMasterPlaylists(variants, rootDir) {
+  createMasterPlaylist(variants, rootDir);
+  const sd = variants.filter((v) => v.dir === 'sd').map(({ dir, ...v }) => v);
+  createMasterPlaylist(sd, path.join(rootDir, 'sd'));
 }

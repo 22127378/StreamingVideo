@@ -61,15 +61,25 @@ export async function forEachLimit(items, limit, fn) {
  * @param {string} s3Prefix Prefix thư mục S3 (ví dụ: videoId)
  * @param {{ signal?: AbortSignal }} options
  */
+/** Đường dẫn tương đối (dùng dấu /) của mọi file trong thư mục, kể cả thư mục con */
+export function listFilesRecursive(dir, prefix = '') {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? listFilesRecursive(path.join(dir, entry.name), rel) : [rel];
+  });
+}
+
 export async function uploadDirectoryToS3(localDir, bucket, s3Prefix, { signal } = {}) {
-  const files = fs.readdirSync(localDir);
+  const files = listFilesRecursive(localDir);
   console.log(`[S3] Bắt đầu upload ${files.length} files từ ${localDir} lên s3://${bucket}/${s3Prefix}...`);
 
-  // Upload playlist sau cùng để player không thấy playlist trỏ tới segment chưa có
+  // Upload playlist sau cùng để player không thấy playlist trỏ tới segment chưa có.
+  // Master upload cuối cùng, sd/master.m3u8 trước master.m3u8.
+  const isMaster = (f) => path.basename(f) === 'master.m3u8';
   const ordered = [
     ...files.filter((f) => !f.endsWith('.m3u8')),
-    ...files.filter((f) => f.endsWith('.m3u8') && f !== 'master.m3u8'),
-    ...files.filter((f) => f === 'master.m3u8'),
+    ...files.filter((f) => f.endsWith('.m3u8') && !isMaster(f)),
+    ...files.filter(isMaster).sort((a, b) => b.length - a.length),
   ];
   const segments = ordered.filter((f) => !f.endsWith('.m3u8'));
   const playlists = ordered.filter((f) => f.endsWith('.m3u8'));

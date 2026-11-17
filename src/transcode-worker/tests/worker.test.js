@@ -9,9 +9,11 @@ import {
   computeOutputSize,
   selectProfiles,
   parseFrameRate,
+  renditionDir,
+  writeMasterPlaylists,
 } from '../src/services/ffmpegService.js';
 import { planFailure, assertWithinLimits, RejectedSourceError } from '../src/services/sqsConsumer.js';
-import { forEachLimit } from '../src/services/s3Service.js';
+import { forEachLimit, listFilesRecursive } from '../src/services/s3Service.js';
 import { FFMPEG_BINARIES } from '../src/services/ffmpegService.js';
 import { spawnSync } from 'node:child_process';
 
@@ -150,5 +152,32 @@ test('StreamForge Transcode Worker Unit Tests', async (t) => {
     });
     assert.strictEqual(peak, 3);
     assert.deepStrictEqual(done.sort(), [1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  await t.test('10. Renditions above 720p go to hd/, the rest to sd/', () => {
+    assert.strictEqual(renditionDir(HLS_PROFILES['1080p']), 'hd');
+    assert.strictEqual(renditionDir(HLS_PROFILES['720p']), 'sd');
+    assert.strictEqual(renditionDir(HLS_PROFILES['360p']), 'sd');
+  });
+
+  await t.test('11. Premium master lists every rendition, free master stops at 720p', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streamforge-test-'));
+    writeMasterPlaylists(
+      [
+        { playlist: '1080p.m3u8', profile: HLS_PROFILES['1080p'], dir: 'hd' },
+        { playlist: '720p.m3u8', profile: HLS_PROFILES['720p'], dir: 'sd' },
+        { playlist: '360p.m3u8', profile: HLS_PROFILES['360p'], dir: 'sd' },
+      ],
+      tempDir
+    );
+    const full = fs.readFileSync(path.join(tempDir, 'master.m3u8'), 'utf-8');
+    assert.ok(full.includes('\nhd/1080p.m3u8\n'));
+    assert.ok(full.includes('\nsd/720p.m3u8\n'));
+    const free = fs.readFileSync(path.join(tempDir, 'sd', 'master.m3u8'), 'utf-8');
+    assert.ok(!free.includes('1080p'));
+    assert.ok(free.includes('\n720p.m3u8\n'));
+    assert.ok(free.includes('\n360p.m3u8\n'));
+    assert.deepStrictEqual(listFilesRecursive(tempDir).sort(), ['master.m3u8', 'sd/master.m3u8']);
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
