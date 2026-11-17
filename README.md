@@ -185,7 +185,19 @@ User ──▶ CloudFront (Signed Cookie) ──▶ ALB ──▶ EKS
               └── Short-lived, tier-gated access
 ```
 
-On AWS, the API checks the user's Cognito groups and sets three CloudFront cookies limited to `/videos/<id>/` for two hours. Free users get cookies only for free videos; `premium` and `admin` users get them for every video. Locally there is no Cognito, so `/api/auth/dev-login` issues a JWT signed by `JWT_SECRET` for any email and tier. That mode is for development only.
+On AWS, the API checks the user's Cognito groups and sets three CloudFront cookies limited to `/videos/<id>/` for two hours. Locally there is no Cognito, so `/api/auth/dev-login` issues a JWT signed by `JWT_SECRET` for any email and tier. That mode is for development only.
+
+### Free and Premium
+
+| | Free | Premium (group `premium` or `admin`) |
+| --- | --- | --- |
+| Free videos | Yes | Yes |
+| Premium videos | Only the ones they uploaded themselves | Yes |
+| Highest quality | 720p | 1080p |
+
+Every video carries a tier chosen by the uploader. The worker writes renditions up to 720p under `<id>/sd/` together with an `sd/master.m3u8` that lists only those, and anything higher under `<id>/hd/`. A free user's cookie policy covers `/videos/<id>/sd/*` only, so CloudFront answers 403 for the 1080p playlist and segments even if the URL is known. A premium user's policy covers `/videos/<id>/*` and the API hands out the full `master.m3u8`. "Upgrade to Premium" adds the user to the Cognito group; there is no payment step.
+
+Each playback start counts a view, and signed-in users who can watch a video can rate it 1 to 5 stars (one rating per user, re-rating overwrites). The home page lists READY videos filtered by tier and upload period and sorted by newest, oldest, views or rating, with keyset pagination for each sort order. `scripts/seed-demo-videos.sh` uploads generated sample videos, and `SEED_DEMO_STATS=true ./k8s/deploy.sh` gives READY videos without any stats some sample views and ratings (stored under `demo:` user ids).
 
 ## Deploying to AWS
 
