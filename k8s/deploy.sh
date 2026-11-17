@@ -171,7 +171,9 @@ EOF
 log "Database migration"
 mkdir -p "$DB_OVERLAY"
 cp "$OVERLAY/config.env" "$DB_OVERLAY/config.env"
-printf 'DB_MASTER_SECRET_ARN=%s\nIMPORT_DYNAMODB_TABLE=%s\n' "$DB_MASTER_SECRET_ARN" "$TABLE" > "$DB_OVERLAY/migrate.env"
+# SEED_DEMO_STATS=true ./k8s/deploy.sh: thêm lượt xem và đánh giá mẫu cho video READY chưa có số liệu
+printf 'DB_MASTER_SECRET_ARN=%s\nIMPORT_DYNAMODB_TABLE=%s\nSEED_DEMO_STATS=%s\n' \
+  "$DB_MASTER_SECRET_ARN" "$TABLE" "${SEED_DEMO_STATS:-false}" > "$DB_OVERLAY/migrate.env"
 cat > "$DB_OVERLAY/kustomization.yaml" <<EOF
 # Sinh bởi k8s/deploy.sh, không commit (chứa account ID)
 apiVersion: kustomize.config.k8s.io/v1beta1
