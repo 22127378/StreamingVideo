@@ -1,0 +1,46 @@
+# Migration database: schema, user DB cho API và worker, chép dữ liệu cũ từ DynamoDB.
+# k8s/deploy.sh chạy Job này (image API, lệnh node src/db/migrate.js) trước khi rollout app.
+# ServiceAccount có Pod Identity đọc mật khẩu master (Secrets Manager) và Scan bảng DynamoDB cũ.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-db-migrator
+  namespace: streamforge
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: streamforge-db-migrate
+  namespace: streamforge
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: streamforge-db-migrate
+    spec:
+      serviceAccountName: streamforge-db-migrator
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: streamforge-api
+          command: ["node", "src/db/migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+            - configMapRef:
+                name: streamforge-db-migrate
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
