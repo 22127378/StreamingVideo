@@ -10,7 +10,7 @@ Hạ tầng AWS cho StreamForge, chia thành các layer áp dụng độc lập 
 | `identity` | IAM policy tối thiểu quyền cho API và worker, cộng hai dev role | `storage`, `messaging` | 0 |
 | `networking` | VPC 2 AZ, subnet public/private, 1 NAT gateway | `backend` | ~$33/tháng (NAT) |
 | `compute` | EKS Auto Mode, ECR, security group ALB chỉ mở cho CloudFront, Pod Identity cho API, worker và KEDA | `networking`, `identity` | ~$73/tháng (control plane) cộng node |
-| `delivery` | CloudFront: HLS từ bucket `processed`, `/api/*` tới ALB | `compute` và Ingress của API | Gần 0, tính theo traffic |
+| `delivery` | Bucket `web` cho frontend và CloudFront: `/` là frontend, `/api/*` tới ALB, `/videos/*` là HLS từ bucket `processed` (CloudFront Function bỏ tiền tố `/videos`). `PriceClass_200` để có edge ở châu Á | `compute` và Ingress của API | Gần 0, tính theo traffic |
 
 Ứng dụng chạy trên EKS được deploy bằng `k8s/deploy.sh` (xem mục "Deploy ứng dụng" bên dưới).
 
@@ -77,9 +77,10 @@ terraform init -backend-config=../../backend.hcl
 terraform apply -var "api_alb_dns_name=<DNS của ALB>"
 cd -
 SKIP_BUILD=1 ./k8s/deploy.sh    # trỏ CDN_BASE_URL sang CloudFront
+./src/frontend/deploy.sh        # build và đẩy frontend lên bucket web
 ```
 
-Sau đó API nằm ở `https://<cloudfront-domain>/api/...` và link phát HLS ở `https://<cloudfront-domain>/<videoId>/master.m3u8`.
+Sau đó frontend nằm ở `https://<cloudfront-domain>/`, API ở `https://<cloudfront-domain>/api/...` và link phát HLS ở `https://<cloudfront-domain>/videos/<videoId>/master.m3u8`.
 
 - Pod: API (2 replica) chạy trên NodePool `streamforge-app` gồm node on-demand t3/t3a. Worker chạy trên NodePool `streamforge-transcode` gồm node Spot, có taint riêng.
 - KEDA đọc độ dài queue và co giãn worker từ 0 đến 4 pod. Khi không có job, node Spot bị thu hồi sau 2 phút.

@@ -51,6 +51,14 @@ data "aws_iam_policy_document" "api" {
     actions   = ["sqs:SendMessage"]
     resources = [var.queue_arn]
   }
+
+  # DELETE /api/videos/:id xoá cache HLS trên CloudFront. Giới hạn theo account vì
+  # distribution được tạo ở layer delivery, sau layer identity.
+  statement {
+    sid       = "InvalidateDeletedVideos"
+    actions   = ["cloudfront:CreateInvalidation"]
+    resources = ["arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/*"]
+  }
 }
 
 resource "aws_iam_policy" "api" {

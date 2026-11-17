@@ -30,6 +30,7 @@ INDEX=$(tf_out storage videos_created_at_index)
 QUEUE_URL=$(tf_out messaging transcode_queue_url)
 # Trước khi có layer delivery thì chưa có CloudFront; link phát chưa dùng được nhưng API vẫn chạy
 CDN_BASE_URL=$(tf_out delivery cdn_base_url 2>/dev/null || echo "https://cdn-not-configured.invalid")
+CLOUDFRONT_DISTRIBUTION_ID=$(tf_out delivery distribution_id 2>/dev/null || echo "")
 
 # Tag theo commit; working tree có thay đổi chưa commit thì thêm hậu tố (ECR tag là immutable)
 TAG=${IMAGE_TAG:-$(git -C "$ROOT" rev-parse --short HEAD)}
@@ -89,6 +90,7 @@ SQS_TRANSCODE_QUEUE_URL=$QUEUE_URL
 DYNAMODB_VIDEOS_TABLE=$TABLE
 DYNAMODB_VIDEOS_CREATED_AT_INDEX=$INDEX
 CDN_BASE_URL=$CDN_BASE_URL
+CLOUDFRONT_DISTRIBUTION_ID=$CLOUDFRONT_DISTRIBUTION_ID
 EOF
 cat > "$OVERLAY/kustomization.yaml" <<EOF
 # Sinh bởi k8s/deploy.sh, không commit (chứa account ID)
@@ -137,4 +139,4 @@ for _ in $(seq 1 60); do
 done
 echo "ALB: ${ALB:-<not ready yet>}"
 echo "Next (first deploy only): terraform -chdir=$TF/delivery apply -var api_alb_dns_name=$ALB"
-echo "then: SKIP_BUILD=1 $0   to point CDN_BASE_URL at CloudFront"
+echo "then: SKIP_BUILD=1 $0   to point CDN_BASE_URL at CloudFront, and src/frontend/deploy.sh for the site"

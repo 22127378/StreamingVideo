@@ -1,6 +1,8 @@
 # CloudFront trước toàn bộ hệ thống:
-#   /api/*   -> ALB của API (do EKS Auto Mode tạo từ Ingress), không cache
-#   còn lại  -> bucket processed qua Origin Access Control (HLS: master.m3u8, *.ts, thumbnail.jpg)
+#   /api/*     -> ALB của API (do EKS Auto Mode tạo từ Ingress), không cache
+#   /videos/*  -> bucket processed qua Origin Access Control (HLS: master.m3u8, *.ts, thumbnail.jpg).
+#                 CloudFront Function bỏ tiền tố /videos, nên object trên S3 vẫn là {videoId}/...
+#   còn lại    -> bucket web (frontend, build từ src/frontend)
 # ALB chỉ nhận traffic từ dải IP origin-facing của CloudFront (security group ở layer compute).
 #
 # Áp dụng sau khi Ingress của API đã có ALB:
@@ -20,9 +22,9 @@ variable "api_alb_dns_name" {
 }
 
 variable "price_class" {
-  description = "PriceClass_100 serves from North America and Europe edges only, the cheapest option"
+  description = "PriceClass_200 adds Asia (Vietnam users were routed to Europe with PriceClass_100). PriceClass_100 is the cheapest"
   type        = string
-  default     = "PriceClass_100"
+  default     = "PriceClass_200"
 }
 
 data "aws_s3_bucket" "processed" {
@@ -49,6 +51,42 @@ data "aws_cloudfront_response_headers_policy" "cors" {
   name = "Managed-SimpleCORS"
 }
 
+data "aws_cloudfront_response_headers_policy" "security" {
+  name = "Managed-SecurityHeadersPolicy"
+}
+
+# Frontend tĩnh (Vite build). Chỉ CloudFront đọc được.
+module "web_bucket" {
+  source = "../../modules/s3"
+
+  bucket_name           = "${local.name_prefix}-web-${local.account_id}"
+  force_destroy         = true # chỉ chứa file build, tạo lại được
+  allow_cloudfront_read = true
+}
+
+resource "aws_cloudfront_origin_access_control" "web" {
+  name                              = "${local.name_prefix}-web"
+  description                       = "Read the frontend build from the private web bucket"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# /videos/{id}/master.m3u8 -> {id}/master.m3u8 trên bucket processed
+resource "aws_cloudfront_function" "strip_videos_prefix" {
+  name    = "${local.name_prefix}-strip-videos-prefix"
+  runtime = "cloudfront-js-2.0"
+  comment = "Map /videos/* to the processed bucket root"
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      request.uri = request.uri.replace(/^\/videos/, '') || '/';
+      return request;
+    }
+  EOT
+}
+
 resource "aws_cloudfront_origin_access_control" "processed" {
   name                              = "${local.name_prefix}-processed"
   description                       = "Read HLS output from the private processed bucket"
@@ -63,6 +101,14 @@ resource "aws_cloudfront_distribution" "this" {
   price_class     = var.price_class
   is_ipv6_enabled = true
   http_version    = "http2and3"
+
+  default_root_object = "index.html"
+
+  origin {
+    origin_id                = "web-s3"
+    domain_name              = module.web_bucket.regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.web.id
+  }
 
   origin {
     origin_id                = "processed-s3"
@@ -82,8 +128,21 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # HLS: playlist có Cache-Control no-cache, segment max-age 1 năm (worker đặt khi upload)
+  # Frontend: index.html upload với no-cache, file trong assets/ có hash trong tên nên cache lâu
   default_cache_behavior {
+    target_origin_id           = "web-s3"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security.id
+  }
+
+  # HLS: playlist có Cache-Control no-cache, segment max-age 1 năm (worker đặt khi upload).
+  # API invalidate /videos/{id}/* khi xoá video.
+  ordered_cache_behavior {
+    path_pattern               = "/videos/*"
     target_origin_id           = "processed-s3"
     viewer_protocol_policy     = "redirect-to-https"
     allowed_methods            = ["GET", "HEAD", "OPTIONS"]
@@ -92,6 +151,11 @@ resource "aws_cloudfront_distribution" "this" {
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
     origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.cors_s3.id
     response_headers_policy_id = data.aws_cloudfront_response_headers_policy.cors.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.strip_videos_prefix.arn
+    }
   }
 
   ordered_cache_behavior {
@@ -121,6 +185,20 @@ output "cloudfront_domain_name" {
 }
 
 output "cdn_base_url" {
-  description = "Set as CDN_BASE_URL for the API and worker"
+  description = "Set as CDN_BASE_URL for the API and worker (HLS lives under /videos)"
+  value       = "https://${aws_cloudfront_distribution.this.domain_name}/videos"
+}
+
+output "site_url" {
+  description = "Frontend URL"
   value       = "https://${aws_cloudfront_distribution.this.domain_name}"
+}
+
+output "distribution_id" {
+  description = "Set as CLOUDFRONT_DISTRIBUTION_ID for the API (cache invalidation on delete)"
+  value       = aws_cloudfront_distribution.this.id
+}
+
+output "web_bucket" {
+  value = module.web_bucket.id
 }
