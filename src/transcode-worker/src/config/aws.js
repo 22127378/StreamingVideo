@@ -1,6 +1,4 @@
 import { S3Client } from '@aws-sdk/client-s3';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -32,15 +30,6 @@ export const s3Client = new S3Client({
   forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE === 'true' || !!endpoint,
 });
 
-// DynamoDB Document Client
-const ddbClient = new DynamoDBClient(baseConfig);
-export const docClient = DynamoDBDocumentClient.from(ddbClient, {
-  marshallOptions: {
-    removeUndefinedValues: true,
-    convertEmptyValues: true,
-  },
-});
-
 // SQS Client
 export const sqsClient = new SQSClient(baseConfig);
 
@@ -50,7 +39,6 @@ export const config = {
   transcodeQueueUrl:
     process.env.SQS_TRANSCODE_QUEUE_URL ||
     'http://localhost:4566/000000000000/streamforge-transcode-queue',
-  videosTable: process.env.DYNAMODB_VIDEOS_TABLE || 'streamforge-videos',
   cdnBaseUrl: process.env.CDN_BASE_URL || 'http://localhost:4566/streamforge-processed',
   // Polling configuration
   pollingWaitTimeSeconds: parseInt(process.env.SQS_POLLING_WAIT_TIME || '10', 10),

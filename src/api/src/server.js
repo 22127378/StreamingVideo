@@ -11,7 +11,7 @@ const server = app.listen(config.port, () => {
   console.log(`Environment: ${config.nodeEnv}`);
   console.log(`S3 Raw Bucket: ${config.rawBucket}`);
   console.log(`SQS Queue URL: ${config.transcodeQueueUrl}`);
-  console.log(`DynamoDB Table: ${config.videosTable}`);
+  console.log(`Database: ${process.env.DB_HOST || 'localhost'}/${process.env.DB_NAME || 'streamforge'}`);
   console.log(`Healthcheck: http://localhost:${config.port}/health`);
 });
 

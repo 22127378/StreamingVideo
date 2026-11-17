@@ -8,7 +8,6 @@ RAW_BUCKET="streamforge-raw-uploads"
 PROCESSED_BUCKET="streamforge-processed"
 QUEUE_NAME="streamforge-transcode-queue"
 DLQ_NAME="streamforge-transcode-dlq"
-DYNAMO_TABLE="streamforge-videos"
 
 # 1. Create S3 Buckets & Set CORS
 echo "1. Creating S3 Buckets..."
@@ -38,22 +37,4 @@ awslocal sqs create-queue \
 
 echo "Main SQS Queue created: ${QUEUE_NAME}"
 
-# 3. Create DynamoDB Table
-echo "3. Creating DynamoDB Table (${DYNAMO_TABLE})..."
-# GSI entityType-createdAt-index: liệt kê video mới nhất trước, có phân trang (GET /api/videos)
-if awslocal dynamodb describe-table --table-name ${DYNAMO_TABLE} --region ${AWS_REGION} > /dev/null 2>&1; then
-  echo "Table ${DYNAMO_TABLE} already exists"
-else
-  awslocal dynamodb create-table \
-    --table-name ${DYNAMO_TABLE} \
-    --attribute-definitions \
-      AttributeName=videoId,AttributeType=S \
-      AttributeName=entityType,AttributeType=S \
-      AttributeName=createdAt,AttributeType=S \
-    --key-schema AttributeName=videoId,KeyType=HASH \
-    --global-secondary-indexes \
-      "IndexName=entityType-createdAt-index,KeySchema=[{AttributeName=entityType,KeyType=HASH},{AttributeName=createdAt,KeyType=RANGE}],Projection={ProjectionType=ALL}" \
-    --billing-mode PAY_PER_REQUEST \
-    --region ${AWS_REGION}
-fi
 echo "[StreamForge] Local AWS resources are ready."

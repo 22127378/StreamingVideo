@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 // Credentials giả để AWS SDK không dùng tới session thật trên máy. Các test dưới đây
-// không gọi tới AWS: chúng dừng ở bước validate hoặc xác thực trước khi truy cập DynamoDB/S3.
+// không gọi tới AWS: chúng dừng ở bước validate hoặc xác thực trước khi truy cập database/S3.
 process.env.AWS_ACCESS_KEY_ID = 'test';
 process.env.AWS_SECRET_ACCESS_KEY = 'test';
 process.env.AWS_ENDPOINT_URL ||= 'http://localhost:4566';
@@ -51,7 +51,7 @@ test('unknown route returns 404', async () => {
   assert.equal(status, 404);
 });
 
-test('GET /api/videos rejects invalid query before touching DynamoDB', async () => {
+test('GET /api/videos rejects invalid query before touching the database', async () => {
   for (const qs of ['limit=0', 'limit=101', 'limit=abc', 'status=DONE', 'nextToken=not-a-cursor']) {
     const { status } = await call('GET', `/api/videos?${qs}`);
     assert.equal(status, 400, qs);

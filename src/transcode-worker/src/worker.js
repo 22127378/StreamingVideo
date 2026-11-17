@@ -10,7 +10,7 @@ console.log('StreamForge Transcode Worker Service Started');
 console.log(`SQS Queue: ${config.transcodeQueueUrl}`);
 console.log(`S3 Raw Bucket: ${config.rawBucket}`);
 console.log(`S3 Processed Bucket: ${config.processedBucket}`);
-console.log(`DynamoDB Table: ${config.videosTable}`);
+console.log(`Database: ${process.env.DB_HOST || 'localhost'}/${process.env.DB_NAME || 'streamforge'}`);
 
 // stopController: ngừng nhận message mới. jobController: hủy job đang chạy.
 const stopController = new AbortController();

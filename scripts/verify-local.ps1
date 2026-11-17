@@ -20,16 +20,7 @@ try {
     Write-Host "S3 check via AWS CLI skipped or failed." -ForegroundColor DarkYellow
 }
 
-# 3. Check DynamoDB Tables
-Write-Host "`nChecking DynamoDB Tables..." -ForegroundColor Yellow
-try {
-    $dynamoResponse = aws --endpoint-url=$endpoint dynamodb list-tables --region us-east-1 2>&1
-    Write-Host $dynamoResponse
-} catch {
-    Write-Host "DynamoDB check via AWS CLI skipped or failed." -ForegroundColor DarkYellow
-}
-
-# 4. Check SQS Queues
+# 3. Check SQS Queues
 Write-Host "`nChecking SQS Queues..." -ForegroundColor Yellow
 try {
     $sqsResponse = aws --endpoint-url=$endpoint sqs list-queues --region us-east-1 2>&1

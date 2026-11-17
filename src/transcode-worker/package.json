@@ -20,10 +20,8 @@
   "author": "StreamForge Team",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.758.0",
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/client-sqs": "^3.758.0",
-    "@aws-sdk/lib-dynamodb": "^3.758.0",
     "@aws-sdk/rds-signer": "^3.1170.0",
     "dotenv": "^16.4.7",
     "fluent-ffmpeg": "^2.1.3",

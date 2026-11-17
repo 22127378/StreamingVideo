@@ -19,10 +19,6 @@ echo "S3 Buckets:"
 aws --endpoint-url=${ENDPOINT} s3 ls || true
 
 echo ""
-echo "DynamoDB Tables:"
-aws --endpoint-url=${ENDPOINT} dynamodb list-tables --region ${REGION} || true
-
-echo ""
 echo "SQS Queues:"
 aws --endpoint-url=${ENDPOINT} sqs list-queues --region ${REGION} || true
 

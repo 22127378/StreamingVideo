@@ -184,7 +184,7 @@ export async function requestUploadUrl(req, res, next) {
       validatedData.fileSize
     );
 
-    // 2. Tạo record UPLOADING trong DynamoDB
+    // 2. Tạo record UPLOADING trong database
     const videoRecord = await createVideoRecord({
       videoId,
       title: validatedData.title || validatedData.fileName.replace(/\.[^/.]+$/, ''),

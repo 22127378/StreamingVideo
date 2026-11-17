@@ -175,7 +175,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
   try {
     signal?.throwIfAborted();
 
-    // 1. Cập nhật DynamoDB sang PROCESSING. Video đã bị xóa thì bỏ job này luôn.
+    // 1. Cập nhật database sang PROCESSING. Video đã bị xóa thì bỏ job này luôn.
     try {
       await updateVideoStatus(videoId, 'PROCESSING', { attempt: receiveCount });
     } catch (err) {
@@ -218,7 +218,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     // 8. Upload toàn bộ thư mục HLS lên S3 Processed Bucket
     await uploadDirectoryToS3(hlsOutputDir, processedBucket, videoId, { signal });
 
-    // 9. Cập nhật DynamoDB sang READY
+    // 9. Cập nhật database sang READY
     const qualities = successfulVariants.map((v) => ({
       resolution: v.profile.name,
       width: v.width,
