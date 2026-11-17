@@ -14,6 +14,8 @@ import {
   VIDEO_ENTITY_TYPE,
 } from '../services/dynamoService.js';
 import { sendTranscodeJob } from '../services/sqsService.js';
+import { invalidateVideoCache } from '../services/cloudfrontService.js';
+import { canWatch, signedPlaybackCookies } from '../services/playbackService.js';
 import { config } from '../config/aws.js';
 
 // Schemas validation
@@ -45,13 +47,11 @@ const ListVideosQuerySchema = z.object({
 });
 
 // Khóa phân trang của GSI: chỉ chấp nhận đúng 3 trường, tránh client chèn khóa tùy ý
-const CursorSchema = z
-  .object({
-    videoId: z.string().min(1).max(64),
-    entityType: z.literal(VIDEO_ENTITY_TYPE),
-    createdAt: z.string().datetime(),
-  })
-  .strict();
+const CursorSchema = z.strictObject({
+  videoId: z.string().min(1).max(64),
+  entityType: z.literal(VIDEO_ENTITY_TYPE),
+  createdAt: z.iso.datetime(),
+});
 
 const VideoIdParamSchema = z.object({
   id: z.string().uuid('VideoId không hợp lệ'),
@@ -84,11 +84,79 @@ export function decodeCursor(token) {
 export function toPublicVideo(video) {
   const { entityType, ...rest } = video;
   const ready = video.status === 'READY';
+  // Luôn tính URL từ CDN_BASE_URL hiện tại, không dùng URL worker lưu lúc transcode,
+  // để đổi domain hoặc đường dẫn CDN không làm hỏng link của video cũ
+  const base = `${config.cdnBaseUrl}/${video.videoId}`;
   return {
     ...rest,
-    streamingUrl: ready ? `${config.cdnBaseUrl}/${video.videoId}/master.m3u8` : null,
-    thumbnailUrl: ready ? video.thumbnailUrl || `${config.cdnBaseUrl}/${video.videoId}/thumbnail.jpg` : null,
+    masterPlaylistUrl: ready ? `${base}/master.m3u8` : undefined,
+    qualities: video.qualities?.map((q) => ({ ...q, playlistUrl: `${base}/${q.resolution}.m3u8` })),
+    streamingUrl: ready ? `${base}/master.m3u8` : null,
+    thumbnailUrl: ready ? `${base}/thumbnail.jpg` : null,
   };
+}
+
+/** Video tạo trước khi có đăng nhập không có ownerId: ai đăng nhập cũng quản lý được */
+function isOwner(user, video) {
+  return !video.ownerId || video.ownerId === user.sub;
+}
+
+function forbiddenNotOwner(res) {
+  return res.status(403).json({ success: false, message: 'Chỉ người upload mới thực hiện được thao tác này' });
+}
+
+/**
+ * [POST /api/videos/:id/playback]
+ * Kiểm tra quyền xem theo gói rồi cấp CloudFront signed cookies cho /videos/{id}/.
+ * Không có cookie hợp lệ thì CloudFront từ chối mọi request HLS của video đó (403).
+ */
+export async function startPlayback(req, res, next) {
+  try {
+    const { id } = VideoIdParamSchema.parse(req.params);
+    const video = await getVideoById(id);
+    if (!video) {
+      return res.status(404).json({ success: false, message: `Video not found with ID: ${id}` });
+    }
+    if (video.status !== 'READY') {
+      return res.status(409).json({
+        success: false,
+        message: `Video chưa sẵn sàng để phát (trạng thái ${video.status})`,
+        currentStatus: video.status,
+      });
+    }
+    if (!canWatch(req.user, video)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Video dành cho gói Premium',
+        requiredTier: 'premium',
+        userTier: req.user.tier,
+      });
+    }
+
+    const signed = signedPlaybackCookies(id);
+    if (signed) {
+      for (const [name, value] of Object.entries(signed.cookies)) {
+        res.cookie(name, value, {
+          path: signed.path,
+          expires: signed.expires,
+          secure: true,
+          httpOnly: true,
+          sameSite: 'lax',
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        streamingUrl: toPublicVideo(video).streamingUrl,
+        expiresAt: signed?.expires.toISOString() ?? null,
+        signedCookies: Boolean(signed),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 }
 
 /**
@@ -117,6 +185,7 @@ export async function requestUploadUrl(req, res, next) {
       contentType: validatedData.contentType,
       fileSize: validatedData.fileSize,
       tier: validatedData.tier,
+      ownerId: req.user.sub,
       rawS3Key: s3Key,
     });
 
@@ -157,6 +226,10 @@ export async function completeUpload(req, res, next) {
     }
 
     // 2. Chỉ cho phép hoàn tất khi video đang ở trạng thái UPLOADING (chống gọi lặp)
+    if (!isOwner(req.user, video)) {
+      return forbiddenNotOwner(res);
+    }
+
     if (video.status !== 'UPLOADING') {
       return res.status(409).json({
         success: false,
@@ -287,6 +360,9 @@ export async function deleteVideo(req, res, next) {
         message: `Video not found with ID: ${id}`,
       });
     }
+    if (!isOwner(req.user, existing)) {
+      return forbiddenNotOwner(res);
+    }
     if (existing.status === 'PROCESSING') {
       return res.status(409).json({
         success: false,
@@ -306,13 +382,16 @@ export async function deleteVideo(req, res, next) {
       deleteS3Prefix(existing.processedBucket || config.processedBucket, `${id}/`),
     ]);
 
-    // 3. Xóa bản ghi
+    // 3. Xoá cache CloudFront. Lỗi ở đây giữ video ở DELETING để gọi DELETE lại là chạy lại bước này.
+    const cache = await invalidateVideoCache(id);
+
+    // 4. Xóa bản ghi
     await deleteVideoRecord(id);
 
     res.status(200).json({
       success: true,
       message: `Video ${id} deleted successfully`,
-      data: { deletedObjects: rawDeleted + processedDeleted },
+      data: { deletedObjects: rawDeleted + processedDeleted, cache },
     });
   } catch (error) {
     next(error);

@@ -24,6 +24,7 @@ export async function createVideoRecord(videoData) {
     originalFileName: videoData.originalFileName,
     contentType: videoData.contentType || 'video/mp4',
     fileSize: videoData.fileSize,
+    ownerId: videoData.ownerId,
     tier: videoData.tier || 'free', // 'free' or 'premium'
     status: 'UPLOADING', // UPLOADING -> PROCESSING -> READY -> FAILED
     rawS3Key: videoData.rawS3Key,

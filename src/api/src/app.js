@@ -53,7 +53,7 @@ export function createApp({ rateLimit = {} } = {}) {
   });
 
   // API Routes
-  app.post(['/api/videos/upload-url', '/api/videos/complete', '/api/auth/playback-token'], limitWrites);
+  app.post(['/api/videos/upload-url', '/api/videos/complete', '/api/auth/dev-login', '/api/auth/upgrade'], limitWrites);
   app.use('/api/videos', videoRoutes);
   app.use('/api/auth', authRoutes);
 

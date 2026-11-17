@@ -62,7 +62,13 @@ export const config = {
   videosTable: process.env.DYNAMODB_VIDEOS_TABLE || 'streamforge-videos',
   videosByCreatedAtIndex: process.env.DYNAMODB_VIDEOS_CREATED_AT_INDEX || 'entityType-createdAt-index',
   cdnBaseUrl: process.env.CDN_BASE_URL || 'http://localhost:4566/streamforge-processed',
-  jwtSecret: resolveJwtSecret(),
+  // Có thì API xoá cache CloudFront của video khi DELETE. Bỏ trống khi chạy local (LocalStack).
+  cloudfrontDistributionId: process.env.CLOUDFRONT_DISTRIBUTION_ID || '',
+  auth: resolveAuth(),
+  // Signed cookies cho /videos/* (CloudFront key group). Bỏ trống khi chạy local: HLS không bị chặn.
+  cloudfrontKeyPairId: process.env.CLOUDFRONT_KEY_PAIR_ID || '',
+  cloudfrontPrivateKey: (process.env.CLOUDFRONT_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+  playbackCookieTtlSeconds: parseInt(process.env.PLAYBACK_COOKIE_TTL_SECONDS || '7200', 10),
   // Giới hạn chi phí: dung lượng upload tối đa (mặc định 2 GiB)
   maxUploadBytes: parseInt(process.env.MAX_UPLOAD_BYTES || String(2 * 1024 ** 3), 10),
   // Số request tạo upload/token mỗi IP trong một cửa sổ thời gian (0 = tắt)
@@ -73,15 +79,36 @@ export const config = {
 };
 
 /**
- * Ở production bắt buộc có JWT_SECRET đủ dài. Secret mặc định chỉ dùng cho local.
+ * Chế độ xác thực:
+ * - cognito: có COGNITO_USER_POOL_ID. API xác minh access token của Cognito, gói = group "premium".
+ * - dev: chạy local không có Cognito (LocalStack). API tự cấp token HS256 ký bằng JWT_SECRET qua
+ *   POST /api/auth/dev-login, ai cũng chọn được gói. Ở production chỉ bật khi ALLOW_DEV_AUTH=true
+ *   (docker compose), và khi đó bắt buộc JWT_SECRET đủ dài.
  */
-function resolveJwtSecret() {
-  const secret = process.env.JWT_SECRET;
-  if ((process.env.NODE_ENV || 'development') === 'production') {
-    if (!secret || secret.length < 32) {
-      throw new Error('JWT_SECRET phải được cấu hình và dài ít nhất 32 ký tự khi NODE_ENV=production');
-    }
-    return secret;
+function resolveAuth() {
+  const production = (process.env.NODE_ENV || 'development') === 'production';
+  const userPoolId = process.env.COGNITO_USER_POOL_ID || '';
+
+  if (userPoolId) {
+    const clientId = process.env.COGNITO_CLIENT_ID;
+    if (!clientId) throw new Error('COGNITO_CLIENT_ID is required when COGNITO_USER_POOL_ID is set');
+    return {
+      mode: 'cognito',
+      userPoolId,
+      clientId,
+      region: userPoolId.split('_')[0],
+      // Domain trang đăng nhập (https://xxx.auth.<region>.amazoncognito.com), frontend dùng để redirect
+      domain: process.env.COGNITO_DOMAIN || '',
+      premiumGroup: process.env.COGNITO_PREMIUM_GROUP || 'premium',
+    };
   }
-  return secret || 'streamforge-local-dev-secret';
+
+  if (production && process.env.ALLOW_DEV_AUTH !== 'true') {
+    throw new Error('COGNITO_USER_POOL_ID is required in production (set ALLOW_DEV_AUTH=true only for local Docker)');
+  }
+  const secret = process.env.JWT_SECRET;
+  if (production && (!secret || secret.length < 32)) {
+    throw new Error('JWT_SECRET phải được cấu hình và dài ít nhất 32 ký tự khi dùng dev auth với NODE_ENV=production');
+  }
+  return { mode: 'dev', jwtSecret: secret || 'streamforge-local-dev-secret' };
 }

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 // Credentials giả để AWS SDK không dùng tới session thật trên máy. Các test dưới đây
@@ -12,6 +13,8 @@ const { createApp } = await import('../src/app.js');
 const { config } = await import('../src/config/aws.js');
 const { encodeCursor, decodeCursor, toPublicVideo } = await import('../src/controllers/videoController.js');
 const { generateUploadPresignedUrl } = await import('../src/services/s3Service.js');
+const { videoInvalidationPaths, invalidateVideoCache } = await import('../src/services/cloudfrontService.js');
+const { signedPlaybackCookies, canWatch } = await import('../src/services/playbackService.js');
 
 const VIDEO_A = '11111111-1111-4111-8111-111111111111';
 const VIDEO_B = '22222222-2222-4222-8222-222222222222';
@@ -32,8 +35,10 @@ async function call(method, path, { body, token } = {}) {
   return { status: res.status, body: await res.json() };
 }
 
-const sign = (payload, opts = {}) =>
-  jwt.sign(payload, config.jwtSecret, { algorithm: 'HS256', issuer: 'StreamForge-Auth', expiresIn: '1h', ...opts });
+async function devLogin(email, tier = 'free') {
+  const { body } = await call('POST', '/api/auth/dev-login', { body: { email, tier } });
+  return body.data.token;
+}
 
 test('GET /health returns UP', async () => {
   const { status, body } = await call('GET', '/health');
@@ -55,7 +60,8 @@ test('GET /api/videos rejects invalid query before touching DynamoDB', async () 
 
 test('GET and DELETE /api/videos/:id reject non-UUID ids', async () => {
   assert.equal((await call('GET', '/api/videos/abc')).status, 400);
-  assert.equal((await call('DELETE', '/api/videos/..%2F..')).status, 400);
+  const token = await devLogin('erin@example.com');
+  assert.equal((await call('DELETE', '/api/videos/..%2F..', { token })).status, 400);
 });
 
 test('cursor round-trips and rejects tampered keys', () => {
@@ -74,36 +80,109 @@ test('toPublicVideo hides internal fields and adds URLs only when READY', () => 
   assert.equal(ready.entityType, undefined);
   assert.equal(ready.streamingUrl, `${config.cdnBaseUrl}/${VIDEO_A}/master.m3u8`);
 
+  // URL lưu từ cấu hình CDN cũ bị thay bằng URL tính từ CDN_BASE_URL hiện tại
+  const stale = toPublicVideo({
+    videoId: VIDEO_A,
+    status: 'READY',
+    thumbnailUrl: 'https://old.example/x/thumbnail.jpg',
+    qualities: [{ resolution: '720p', playlistUrl: 'https://old.example/x/720p.m3u8' }],
+  });
+  assert.equal(stale.thumbnailUrl, `${config.cdnBaseUrl}/${VIDEO_A}/thumbnail.jpg`);
+  assert.equal(stale.qualities[0].playlistUrl, `${config.cdnBaseUrl}/${VIDEO_A}/720p.m3u8`);
+
   const processing = toPublicVideo({ videoId: VIDEO_A, status: 'PROCESSING' });
   assert.equal(processing.streamingUrl, null);
   assert.equal(processing.thumbnailUrl, null);
 });
 
-test('verify-playback requires a valid Bearer token', async () => {
-  assert.equal((await call('POST', '/api/auth/verify-playback', { body: { videoId: VIDEO_A } })).status, 401);
-
-  const forged = jwt.sign({ sub: 'u', tier: 'premium', videoId: '*' }, 'wrong-secret', { issuer: 'StreamForge-Auth' });
-  assert.equal((await call('POST', '/api/auth/verify-playback', { body: { videoId: VIDEO_A }, token: forged })).status, 401);
-
-  const wrongIssuer = sign({ sub: 'u', tier: 'premium', videoId: '*' }, { issuer: 'someone-else' });
-  assert.equal((await call('POST', '/api/auth/verify-playback', { body: { videoId: VIDEO_A }, token: wrongIssuer })).status, 401);
-
-  const expired = sign({ sub: 'u', tier: 'premium', videoId: '*' }, { expiresIn: -10 });
-  assert.equal((await call('POST', '/api/auth/verify-playback', { body: { videoId: VIDEO_A }, token: expired })).status, 401);
+test('auth config reports dev mode when Cognito is not configured', async () => {
+  const { status, body } = await call('GET', '/api/auth/config');
+  assert.equal(status, 200);
+  assert.deepEqual(body.data, { mode: 'dev' });
 });
 
-test('verify-playback validates body and rejects a token scoped to another video', async () => {
-  const token = sign({ sub: 'u', tier: 'premium', videoId: VIDEO_B });
-  assert.equal((await call('POST', '/api/auth/verify-playback', { body: {}, token })).status, 400);
+test('dev-login issues a token and /me returns the user and tier', async () => {
+  assert.equal((await call('POST', '/api/auth/dev-login', { body: { email: 'not-an-email' } })).status, 400);
+  assert.equal((await call('POST', '/api/auth/dev-login', { body: { email: 'a@b.co', tier: 'gold' } })).status, 400);
 
-  const { status, body } = await call('POST', '/api/auth/verify-playback', { body: { videoId: VIDEO_A }, token });
-  assert.equal(status, 403);
-  assert.match(body.message, /không dành cho video/);
+  const token = await devLogin('alice@example.com');
+  const me = await call('GET', '/api/auth/me', { token });
+  assert.equal(me.status, 200);
+  assert.equal(me.body.data.email, 'alice@example.com');
+  assert.equal(me.body.data.tier, 'free');
+  // Cùng email thì cùng sub (để vẫn là chủ video cũ)
+  const again = await call('GET', '/api/auth/me', { token: await devLogin('ALICE@example.com') });
+  assert.equal(again.body.data.sub, me.body.data.sub);
 });
 
-test('playback-token rejects malformed input', async () => {
-  assert.equal((await call('POST', '/api/auth/playback-token', { body: { tier: 'gold' } })).status, 400);
-  assert.equal((await call('POST', '/api/auth/playback-token', { body: { videoId: 'abc' } })).status, 400);
+test('protected routes reject missing, forged, foreign and expired tokens', async () => {
+  const sign = (payload, opts = {}) =>
+    jwt.sign(payload, config.auth.jwtSecret, { algorithm: 'HS256', issuer: 'StreamForge-Dev', expiresIn: '1h', ...opts });
+  const user = { sub: 'u', email: 'u@example.com', tier: 'premium' };
+  const tokens = {
+    missing: undefined,
+    forged: jwt.sign(user, 'wrong-secret', { issuer: 'StreamForge-Dev' }),
+    wrongIssuer: sign(user, { issuer: 'someone-else' }),
+    expired: sign(user, { expiresIn: -10 }),
+  };
+  for (const [name, token] of Object.entries(tokens)) {
+    assert.equal((await call('GET', '/api/auth/me', { token })).status, 401, `me ${name}`);
+    assert.equal((await call('POST', `/api/videos/${VIDEO_A}/playback`, { token })).status, 401, `playback ${name}`);
+    assert.equal((await call('POST', '/api/videos/upload-url', { token, body: {} })).status, 401, `upload ${name}`);
+    assert.equal((await call('DELETE', `/api/videos/${VIDEO_A}`, { token })).status, 401, `delete ${name}`);
+  }
+});
+
+test('upgrade turns a free dev user into premium', async () => {
+  const token = await devLogin('bob@example.com');
+  const { status, body } = await call('POST', '/api/auth/upgrade', { token });
+  assert.equal(status, 200);
+  assert.equal(body.data.tier, 'premium');
+  const me = await call('GET', '/api/auth/me', { token: body.data.token });
+  assert.equal(me.body.data.tier, 'premium');
+});
+
+test('premium videos are only watchable on the premium tier', () => {
+  assert.ok(canWatch({ tier: 'free' }, { tier: 'free' }));
+  assert.ok(!canWatch({ tier: 'free' }, { tier: 'premium' }));
+  assert.ok(canWatch({ tier: 'premium' }, { tier: 'premium' }));
+  assert.ok(canWatch({ tier: 'premium' }, { tier: 'free' }));
+});
+
+test('signed playback cookies are scoped to one video and expire', () => {
+  assert.equal(signedPlaybackCookies(VIDEO_A), null, 'no key configured locally');
+
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const saved = { id: config.cloudfrontKeyPairId, key: config.cloudfrontPrivateKey, cdn: config.cdnBaseUrl };
+  Object.assign(config, {
+    cloudfrontKeyPairId: 'K2TESTKEYID',
+    cloudfrontPrivateKey: privateKey.export({ type: 'pkcs1', format: 'pem' }),
+    cdnBaseUrl: 'https://d1.cloudfront.net/videos',
+  });
+  try {
+    const now = Date.UTC(2026, 10, 17);
+    const signed = signedPlaybackCookies(VIDEO_A, now);
+    assert.equal(signed.path, `/videos/${VIDEO_A}/`);
+    assert.deepEqual(Object.keys(signed.cookies).sort(), [
+      'CloudFront-Key-Pair-Id',
+      'CloudFront-Policy',
+      'CloudFront-Signature',
+    ]);
+    assert.equal(signed.cookies['CloudFront-Key-Pair-Id'], 'K2TESTKEYID');
+    const policy = JSON.parse(
+      Buffer.from(signed.cookies['CloudFront-Policy'].replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/'), 'base64').toString()
+    );
+    const statement = policy.Statement[0];
+    assert.equal(statement.Resource, `https://d1.cloudfront.net/videos/${VIDEO_A}/*`);
+    assert.equal(statement.Condition.DateLessThan['AWS:EpochTime'], now / 1000 + config.playbackCookieTtlSeconds);
+  } finally {
+    Object.assign(config, { cloudfrontKeyPairId: saved.id, cloudfrontPrivateKey: saved.key, cdnBaseUrl: saved.cdn });
+  }
+});
+
+test('playback validates the video id', async () => {
+  const token = await devLogin('carol@example.com');
+  assert.equal((await call('POST', '/api/videos/abc/playback', { token })).status, 400);
 });
 
 test('S3 presigned upload URL uses raw/{videoId}/source.{ext} and signs size and type', async () => {
@@ -119,19 +198,41 @@ test('S3 presigned upload URL uses raw/{videoId}/source.{ext} and signs size and
   assert.equal(sneaky.s3Key, `raw/${VIDEO_A}/source.mp4`);
 });
 
+test('CloudFront invalidation covers the viewer path and the rewritten cache key', async () => {
+  assert.deepEqual(videoInvalidationPaths(VIDEO_A, 'https://d1.cloudfront.net/videos'), [
+    `/videos/${VIDEO_A}/*`,
+    `/${VIDEO_A}/*`,
+  ]);
+  assert.deepEqual(videoInvalidationPaths(VIDEO_A, 'https://d1.cloudfront.net/videos/'), [
+    `/videos/${VIDEO_A}/*`,
+    `/${VIDEO_A}/*`,
+  ]);
+  // Không có tiền tố thì chỉ một đường dẫn
+  assert.deepEqual(videoInvalidationPaths(VIDEO_A, 'https://d1.cloudfront.net'), [`/${VIDEO_A}/*`]);
+  // Không có distribution (local) thì bỏ qua, không gọi AWS
+  assert.deepEqual(await invalidateVideoCache(VIDEO_A), {
+    invalidated: false,
+    reason: 'CLOUDFRONT_DISTRIBUTION_ID not set',
+  });
+});
+
 test('upload-url requires a fileSize within MAX_UPLOAD_BYTES', async () => {
+  const token = await devLogin('dave@example.com');
   const body = { fileName: 'a.mp4', contentType: 'video/mp4' };
-  assert.equal((await call('POST', '/api/videos/upload-url', { body })).status, 400);
-  assert.equal((await call('POST', '/api/videos/upload-url', { body: { ...body, fileSize: 0 } })).status, 400);
-  const tooBig = await call('POST', '/api/videos/upload-url', { body: { ...body, fileSize: config.maxUploadBytes + 1 } });
+  assert.equal((await call('POST', '/api/videos/upload-url', { body, token })).status, 400);
+  assert.equal((await call('POST', '/api/videos/upload-url', { body: { ...body, fileSize: 0 }, token })).status, 400);
+  const tooBig = await call('POST', '/api/videos/upload-url', {
+    body: { ...body, fileSize: config.maxUploadBytes + 1 },
+    token,
+  });
   assert.equal(tooBig.status, 400);
   assert.match(JSON.stringify(tooBig.body.errors), /fileSize/);
 });
 
 test('write endpoints are rate limited per client IP', async () => {
   const limited = createApp({ rateLimit: { max: 2, windowSeconds: 60 } }).listen(0);
-  const url = `http://127.0.0.1:${limited.address().port}/api/auth/playback-token`;
-  const post = () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"tier":"gold"}' });
+  const url = `http://127.0.0.1:${limited.address().port}/api/auth/dev-login`;
+  const post = () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"email":"x"}' });
   try {
     assert.equal((await post()).status, 400);
     assert.equal((await post()).status, 400);

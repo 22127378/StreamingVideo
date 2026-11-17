@@ -21,16 +21,20 @@
   "author": "StreamForge Team",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.1169.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1170.0",
     "@aws-sdk/client-dynamodb": "^3.758.0",
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/client-sqs": "^3.758.0",
+    "@aws-sdk/cloudfront-signer": "^3.1166.0",
     "@aws-sdk/lib-dynamodb": "^3.758.0",
     "@aws-sdk/s3-request-presigner": "^3.758.0",
+    "aws-jwt-verify": "^5.2.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "jsonwebtoken": "^9.0.2",
     "uuid": "^11.1.0",
-    "zod": "^3.24.2"
+    "zod": "^4.6.7"
   }
 }
