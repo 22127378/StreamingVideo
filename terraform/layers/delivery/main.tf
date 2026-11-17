@@ -1,5 +1,6 @@
 # CloudFront trước toàn bộ hệ thống:
 #   /api/*     -> ALB của API (do EKS Auto Mode tạo từ Ingress), không cache
+#   /grafana*  -> cùng ALB, Grafana (k8s/monitoring), không cache
 #   /videos/*  -> bucket processed qua Origin Access Control (HLS: master.m3u8, *.ts, thumbnail.jpg).
 #                 CloudFront Function bỏ tiền tố /videos, nên object trên S3 vẫn là {videoId}/...
 #   còn lại    -> bucket web (frontend, build từ src/frontend)
@@ -9,7 +10,7 @@
 #   terraform apply -var "api_alb_dns_name=$(kubectl -n streamforge get ingress streamforge-api \
 #     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
 #
-# Chưa làm: CloudFront signed cookies theo tier (API vẫn mô phỏng bằng JWT), domain riêng + ACM.
+# Chưa làm: domain riêng + ACM.
 # CloudFront nói chuyện với ALB bằng HTTP vì ALB chưa có chứng chỉ (cần domain riêng).
 
 locals {
@@ -95,6 +96,25 @@ resource "aws_cloudfront_origin_access_control" "processed" {
   signing_protocol                  = "sigv4"
 }
 
+# Khoá ký CloudFront signed cookies. Private key nằm trong state Terraform (S3, mã hoá KMS) và
+# được k8s/deploy.sh đưa vào secret của pod API. Đổi khoá: terraform apply -replace=tls_private_key.playback
+resource "tls_private_key" "playback" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "aws_cloudfront_public_key" "playback" {
+  name        = "${local.name_prefix}-playback"
+  comment     = "Verifies signed cookies issued by the API for HLS playback"
+  encoded_key = tls_private_key.playback.public_key_pem
+}
+
+resource "aws_cloudfront_key_group" "playback" {
+  name    = "${local.name_prefix}-playback"
+  comment = "Keys trusted for /videos/* signed cookies"
+  items   = [aws_cloudfront_public_key.playback.id]
+}
+
 resource "aws_cloudfront_distribution" "this" {
   enabled         = true
   comment         = "${local.name_prefix}: HLS playback and API"
@@ -141,11 +161,13 @@ resource "aws_cloudfront_distribution" "this" {
 
   # HLS: playlist có Cache-Control no-cache, segment max-age 1 năm (worker đặt khi upload).
   # API invalidate /videos/{id}/* khi xoá video.
+  # Thumbnail công khai để thư viện hiện được ảnh khi chưa đăng nhập.
+  # Đứng trước /videos/* vì CloudFront chọn behavior khớp đầu tiên theo thứ tự.
   ordered_cache_behavior {
-    path_pattern               = "/videos/*"
+    path_pattern               = "/videos/*/thumbnail.jpg"
     target_origin_id           = "processed-s3"
     viewer_protocol_policy     = "redirect-to-https"
-    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
     compress                   = true
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
@@ -156,6 +178,40 @@ resource "aws_cloudfront_distribution" "this" {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.strip_videos_prefix.arn
     }
+  }
+
+  # HLS: bắt buộc CloudFront signed cookies (API cấp qua POST /api/videos/{id}/playback sau khi
+  # kiểm tra gói). Thiếu, sai hoặc hết hạn cookie thì CloudFront trả 403.
+  # Playlist có Cache-Control no-cache, segment max-age 1 năm (worker đặt khi upload).
+  # API invalidate /videos/{id}/* và /{id}/* khi xoá video.
+  ordered_cache_behavior {
+    path_pattern               = "/videos/*"
+    target_origin_id           = "processed-s3"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
+    origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.cors_s3.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.cors.id
+    trusted_key_groups         = [aws_cloudfront_key_group.playback.id]
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.strip_videos_prefix.arn
+    }
+  }
+
+  # Grafana (k8s/monitoring) dùng chung ALB với API, có đăng nhập riêng
+  ordered_cache_behavior {
+    path_pattern             = "/grafana*"
+    target_origin_id         = "api-alb"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    compress                 = true
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
   }
 
   ordered_cache_behavior {
@@ -201,4 +257,15 @@ output "distribution_id" {
 
 output "web_bucket" {
   value = module.web_bucket.id
+}
+
+output "playback_key_pair_id" {
+  description = "Set as CLOUDFRONT_KEY_PAIR_ID for the API"
+  value       = aws_cloudfront_public_key.playback.id
+}
+
+output "playback_private_key_pem" {
+  description = "Set as CLOUDFRONT_PRIVATE_KEY for the API (k8s/deploy.sh stores it in a Kubernetes secret)"
+  value       = tls_private_key.playback.private_key_pem
+  sensitive   = true
 }
