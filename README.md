@@ -13,7 +13,9 @@ What exists in this repo today:
 - `src/transcode-worker`: an SQS consumer that downloads the source video, probes it, generates a thumbnail, transcodes up to four HLS renditions (1080p, 720p, 480p, 360p), writes a master playlist, uploads everything to the processed bucket and marks the video `READY`.
 - Dockerfiles for both services in `docker/`, and a GitHub Actions workflow that runs the tests, builds both images and fails on fixable HIGH or CRITICAL vulnerabilities reported by Trivy.
 
-Not built yet: the frontend, the Terraform modules, Kubernetes manifests and the deploy half of CI/CD. The sections below describe the target design for those parts.
+- `src/frontend`: a React page to upload videos with progress, watch transcode status, play HLS with a quality selector and simulate free or premium playback. It is served from the same CloudFront domain as the API (`/api/*`) and the HLS output (`/videos/*`).
+
+Not built yet: CloudFront signed cookies, a custom domain, ArgoCD and the deploy half of CI/CD.
 
 ## Running locally
 
@@ -37,6 +39,8 @@ cd src/transcode-worker && npm install && npm run dev    # in a second terminal
 ```
 
 `src/api/api.http` has sample requests for the full flow: request an upload URL, PUT the file to it, call `/api/videos/complete`, then poll `/api/videos/:id` until the status is `READY`.
+
+Test scenarios for the deployed stack (functional, security, resilience and k6 load tests) are in `docs/test-plan.md`, with scripts under `tests/`.
 
 LocalStack is pinned to 4.4 because later images refuse to start without a `LOCALSTACK_AUTH_TOKEN`. If `.localstack/` holds a table from an older version of the init script, delete that directory before starting (some files in it are owned by root).
 
