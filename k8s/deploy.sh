@@ -15,7 +15,7 @@ KEDA_VERSION=2.20.2
 # Số worker luôn chạy sẵn (chống cold start). 1 ~ +$22/tháng tiền Spot; 0 = co về 0 khi không có job
 WORKER_MIN_REPLICAS=${WORKER_MIN_REPLICAS:-1}
 OVERLAY="$ROOT/k8s/app/overlays/live"
-DB_OVERLAY="$ROOT/k8s/db/overlays/live"
+DB_OVERLAY="$ROOT/k8s/app/overlays/db"
 
 tf_out() { terraform -chdir="$TF/$1" output -raw "$2"; }
 log() { printf '\n==> %s\n' "$*"; }
@@ -170,7 +170,7 @@ cat > "$DB_OVERLAY/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../..
+  - ../../../db
 images:
   - name: streamforge-api
     newName: $API_REPO

@@ -16,7 +16,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
-# Chứng chỉ CA của RDS (Aurora): kết nối TLS kiểm tra chứng chỉ server
+# Chứng chỉ CA của RDS (Aurora): kết nối TLS kiểm tra chứng chỉ server.
+# Tạo thư mục trước: ADD --chmod cũng áp quyền cho thư mục nó tự tạo, 644 làm user node không vào được.
+RUN mkdir -p /app/certs
 ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/certs/rds-global-bundle.pem
 
 USER node
