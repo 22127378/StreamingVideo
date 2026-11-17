@@ -14,7 +14,7 @@ const { config } = await import('../src/config/aws.js');
 const { encodeCursor, decodeCursor, toPublicVideo } = await import('../src/controllers/videoController.js');
 const { generateUploadPresignedUrl } = await import('../src/services/s3Service.js');
 const { videoInvalidationPaths, invalidateVideoCache } = await import('../src/services/cloudfrontService.js');
-const { signedPlaybackCookies, canWatch } = await import('../src/services/playbackService.js');
+const { signedPlaybackCookies, canWatch, canWatchHd } = await import('../src/services/playbackService.js');
 
 const VIDEO_A = '11111111-1111-4111-8111-111111111111';
 const VIDEO_B = '22222222-2222-4222-8222-222222222222';
@@ -52,7 +52,16 @@ test('unknown route returns 404', async () => {
 });
 
 test('GET /api/videos rejects invalid query before touching the database', async () => {
-  for (const qs of ['limit=0', 'limit=101', 'limit=abc', 'status=DONE', 'nextToken=not-a-cursor']) {
+  for (const qs of [
+    'limit=0',
+    'limit=101',
+    'limit=abc',
+    'status=DONE',
+    'nextToken=not-a-cursor',
+    'sort=random',
+    'tier=gold',
+    'period=decade',
+  ]) {
     const { status } = await call('GET', `/api/videos?${qs}`);
     assert.equal(status, 400, qs);
   }
@@ -141,11 +150,20 @@ test('upgrade turns a free dev user into premium', async () => {
   assert.equal(me.body.data.tier, 'premium');
 });
 
-test('premium videos are only watchable on the premium tier', () => {
+test('premium videos are watchable by premium users, admins and their owner', () => {
   assert.ok(canWatch({ tier: 'free' }, { tier: 'free' }));
-  assert.ok(!canWatch({ tier: 'free' }, { tier: 'premium' }));
+  assert.ok(!canWatch({ tier: 'free', sub: 'u1' }, { tier: 'premium', ownerId: 'u2' }));
+  assert.ok(!canWatch({ tier: 'free', sub: 'u1' }, { tier: 'premium' }), 'videos without owner are not free for all');
+  assert.ok(canWatch({ tier: 'free', sub: 'u1' }, { tier: 'premium', ownerId: 'u1' }), 'owner watches own upload');
   assert.ok(canWatch({ tier: 'premium' }, { tier: 'premium' }));
+  assert.ok(canWatch({ tier: 'free', admin: true }, { tier: 'premium' }));
   assert.ok(canWatch({ tier: 'premium' }, { tier: 'free' }));
+});
+
+test('only premium users and admins get renditions above 720p', () => {
+  assert.equal(canWatchHd({ tier: 'free' }), false);
+  assert.equal(canWatchHd({ tier: 'premium' }), true);
+  assert.equal(canWatchHd({ tier: 'free', admin: true }), true);
 });
 
 test('signed playback cookies are scoped to one video and expire', () => {
@@ -160,7 +178,7 @@ test('signed playback cookies are scoped to one video and expire', () => {
   });
   try {
     const now = Date.UTC(2026, 10, 17);
-    const signed = signedPlaybackCookies(VIDEO_A, now);
+    const signed = signedPlaybackCookies(VIDEO_A, { now });
     assert.equal(signed.path, `/videos/${VIDEO_A}/`);
     assert.deepEqual(Object.keys(signed.cookies).sort(), [
       'CloudFront-Key-Pair-Id',
@@ -174,6 +192,14 @@ test('signed playback cookies are scoped to one video and expire', () => {
     const statement = policy.Statement[0];
     assert.equal(statement.Resource, `https://d1.cloudfront.net/videos/${VIDEO_A}/*`);
     assert.equal(statement.Condition.DateLessThan['AWS:EpochTime'], now / 1000 + config.playbackCookieTtlSeconds);
+
+    // Gói Free: chỉ mở sd/ (tới 720p), cookie vẫn gửi cho cả thư mục video
+    const free = signedPlaybackCookies(VIDEO_A, { hd: false, now });
+    assert.equal(free.path, `/videos/${VIDEO_A}/`);
+    const freePolicy = JSON.parse(
+      Buffer.from(free.cookies['CloudFront-Policy'].replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/'), 'base64').toString()
+    );
+    assert.equal(freePolicy.Statement[0].Resource, `https://d1.cloudfront.net/videos/${VIDEO_A}/sd/*`);
   } finally {
     Object.assign(config, { cloudfrontKeyPairId: saved.id, cloudfrontPrivateKey: saved.key, cdnBaseUrl: saved.cdn });
   }

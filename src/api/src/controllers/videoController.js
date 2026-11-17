@@ -11,10 +11,21 @@ import {
   getVideoById,
   listVideos as queryVideos,
   deleteVideoRecord,
+  incrementViews,
+  rateVideo as saveRating,
+  getUserRating,
+  SORTS,
+  PERIODS,
 } from '../services/videoRepository.js';
 import { sendTranscodeJob } from '../services/sqsService.js';
 import { invalidateVideoCache } from '../services/cloudfrontService.js';
-import { canWatch, signedPlaybackCookies } from '../services/playbackService.js';
+import {
+  canWatch,
+  canWatchHd,
+  FREE_MAX_HEIGHT,
+  qualityHeight,
+  signedPlaybackCookies,
+} from '../services/playbackService.js';
 import { playbackDecisions, uploadsCreated } from '../metrics.js';
 import { config } from '../config/aws.js';
 
@@ -40,16 +51,31 @@ const CompleteUploadSchema = z.object({
 
 const VIDEO_STATUSES = ['UPLOADING', 'PROCESSING', 'READY', 'FAILED'];
 
+const SORT_NAMES = Object.keys(SORTS);
+
 const ListVideosQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   status: z.enum(VIDEO_STATUSES).optional(),
+  tier: z.enum(['free', 'premium']).optional(),
+  sort: z.enum(SORT_NAMES).default('newest'),
+  period: z.enum(Object.keys(PERIODS)).optional(),
   nextToken: z.string().max(1024).optional(),
 });
 
-// Khoá phân trang keyset: chỉ chấp nhận đúng 2 trường, tránh client chèn giá trị tuỳ ý
+// Khoá phân trang keyset: chỉ chấp nhận đúng các trường này, tránh client chèn giá trị tuỳ ý.
+// sort ghi lại kiểu sắp xếp đã tạo ra con trỏ; dùng con trỏ với kiểu khác thì bị từ chối.
 const CursorSchema = z.strictObject({
   videoId: z.uuid(),
   createdAt: z.iso.datetime(),
+  value: z
+    .string()
+    .regex(/^\d{1,18}(\.\d{1,4})?$/)
+    .optional(),
+  sort: z.enum(SORT_NAMES).optional(),
+});
+
+const RatingSchema = z.object({
+  stars: z.number().int().min(1).max(5),
 });
 
 const VideoIdParamSchema = z.object({
@@ -60,7 +86,7 @@ export function encodeCursor(lastKey) {
   return lastKey ? Buffer.from(JSON.stringify(lastKey)).toString('base64url') : null;
 }
 
-export function decodeCursor(token) {
+export function decodeCursor(token, sort) {
   if (!token) return undefined;
   let parsed;
   try {
@@ -69,7 +95,8 @@ export function decodeCursor(token) {
     parsed = null;
   }
   const result = CursorSchema.safeParse(parsed);
-  if (!result.success) {
+  const sortMismatch = result.success && sort && (result.data.sort || 'newest') !== sort;
+  if (!result.success || sortMismatch) {
     const error = new Error('nextToken không hợp lệ');
     error.status = 400;
     throw error;
@@ -89,7 +116,12 @@ export function toPublicVideo(video) {
   return {
     ...rest,
     masterPlaylistUrl: ready ? `${base}/master.m3u8` : undefined,
-    qualities: video.qualities?.map((q) => ({ ...q, playlistUrl: `${base}/${q.resolution}.m3u8` })),
+    // q.path có từ khi tách sd/ và hd/; video cũ hơn để file phẳng trong thư mục video
+    qualities: video.qualities?.map((q) => ({
+      ...q,
+      playlistUrl: `${base}/${q.path || `${q.resolution}.m3u8`}`,
+      premiumOnly: qualityHeight(q.resolution) > FREE_MAX_HEIGHT,
+    })),
     streamingUrl: ready ? `${base}/master.m3u8` : null,
     thumbnailUrl: ready ? `${base}/thumbnail.jpg` : null,
   };
@@ -141,7 +173,11 @@ export async function startPlayback(req, res, next) {
     }
 
     decision('allowed');
-    const signed = signedPlaybackCookies(id);
+    // Video transcode theo bố cục sd/ + hd/ thì giới hạn 720p cho gói Free bằng chính sách cookie.
+    // Video cũ (file phẳng, không có q.path) chưa tách được nên mở toàn bộ.
+    const tiered = Boolean(video.qualities?.some((q) => q.path));
+    const hd = canWatchHd(req.user) || !tiered;
+    const signed = signedPlaybackCookies(id, { hd });
     if (signed) {
       for (const [name, value] of Object.entries(signed.cookies)) {
         res.cookie(name, value, {
@@ -154,10 +190,20 @@ export async function startPlayback(req, res, next) {
       }
     }
 
+    const [viewCount, myRating] = await Promise.all([incrementViews(id), getUserRating(id, req.user.sub)]);
+    const base = `${config.cdnBaseUrl}/${id}`;
+    const lockedQualities = hd
+      ? []
+      : (video.qualities || []).filter((q) => qualityHeight(q.resolution) > FREE_MAX_HEIGHT).map((q) => q.resolution);
+
     res.status(200).json({
       success: true,
       data: {
-        streamingUrl: toPublicVideo(video).streamingUrl,
+        streamingUrl: hd ? `${base}/master.m3u8` : `${base}/sd/master.m3u8`,
+        maxHeight: hd ? null : FREE_MAX_HEIGHT,
+        lockedQualities,
+        viewCount,
+        myRating,
         expiresAt: signed?.expires.toISOString() ?? null,
         signedCookies: Boolean(signed),
       },
@@ -305,25 +351,69 @@ export async function completeUpload(req, res, next) {
   }
 }
 
+async function sendVideoPage(res, query, extra = {}) {
+  const { limit, status, tier, sort, period, nextToken } = query;
+  const { items, lastKey } = await queryVideos({
+    limit,
+    status,
+    tier,
+    sort,
+    period,
+    ...extra,
+    startKey: decodeCursor(nextToken, sort),
+  });
+  res.status(200).json({
+    success: true,
+    count: items.length,
+    nextToken: encodeCursor(lastKey && { ...lastKey, sort }),
+    data: items.map(toPublicVideo),
+  });
+}
+
 /**
- * [GET /api/videos?limit=20&status=READY&nextToken=...]
- * Lấy danh sách video, mới nhất trước, có phân trang
+ * [GET /api/videos?limit=20&status=READY&tier=premium&sort=views&period=week&nextToken=...]
+ * Danh sách video có phân trang. sort: newest (mặc định) | oldest | views | rating.
+ * period: day | week | month | year (đăng trong khoảng đó).
  */
 export async function listVideos(req, res, next) {
   try {
-    const { limit, status, nextToken } = ListVideosQuerySchema.parse(req.query);
-    const { items, lastKey } = await queryVideos({
-      limit,
-      status,
-      startKey: decodeCursor(nextToken),
-    });
+    await sendVideoPage(res, ListVideosQuerySchema.parse(req.query));
+  } catch (error) {
+    next(error);
+  }
+}
 
-    res.status(200).json({
-      success: true,
-      count: items.length,
-      nextToken: encodeCursor(lastKey),
-      data: items.map(toPublicVideo),
-    });
+/**
+ * [GET /api/videos/mine]
+ * Video do người dùng hiện tại upload, mọi trạng thái (kể cả đang xử lý, lỗi)
+ */
+export async function listMyVideos(req, res, next) {
+  try {
+    await sendVideoPage(res, ListVideosQuerySchema.parse(req.query), { ownerId: req.user.sub });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * [PUT /api/videos/:id/rating] { stars: 1..5 }
+ * Chấm điểm video. Chỉ chấm được video đã READY và mình có quyền xem; chấm lại thì ghi đè.
+ */
+export async function rateVideo(req, res, next) {
+  try {
+    const { id } = VideoIdParamSchema.parse(req.params);
+    const { stars } = RatingSchema.parse(req.body);
+    const video = await getVideoById(id);
+    if (!video) {
+      return res.status(404).json({ success: false, message: `Video not found with ID: ${id}` });
+    }
+    if (video.status !== 'READY') {
+      return res.status(409).json({ success: false, message: 'Chỉ chấm điểm được video đã sẵn sàng' });
+    }
+    if (!canWatch(req.user, video)) {
+      return res.status(403).json({ success: false, message: 'Video dành cho gói Premium' });
+    }
+    res.status(200).json({ success: true, data: await saveRating(id, req.user.sub, stars) });
   } catch (error) {
     next(error);
   }

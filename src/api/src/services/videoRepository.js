@@ -1,5 +1,5 @@
 // Truy cập bảng videos (PostgreSQL). Thay cho dynamoService.js.
-import { query } from '../db/pool.js';
+import { query, withTransaction } from '../db/pool.js';
 import { config } from '../config/aws.js';
 
 /** Cập nhật có điều kiện không thành (ví dụ 2 request /complete cùng lúc) -> 409 */
@@ -45,6 +45,9 @@ export function toVideo(row) {
     attempt: row.attempt ?? undefined,
     lastError: row.last_error ?? undefined,
     errorMessage: row.error_message ?? undefined,
+    viewCount: row.view_count === undefined ? 0 : Number(row.view_count),
+    ratingAvg: row.rating_avg === undefined || row.rating_avg === null ? 0 : Number(row.rating_avg),
+    ratingCount: row.rating_count ?? 0,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     processedAt: iso(row.processed_at),
@@ -108,39 +111,108 @@ export async function getVideoById(videoId) {
   return toVideo(rows[0]);
 }
 
+// Kiểu sắp xếp -> cột chính. Khoá phụ luôn là (created_at, video_id) để thứ tự ổn định.
+// Chỉ các tên trong bảng này được ghép vào SQL.
+export const SORTS = {
+  newest: { column: null, dir: 'DESC' },
+  oldest: { column: null, dir: 'ASC' },
+  views: { column: 'view_count', dir: 'DESC' },
+  rating: { column: 'rating_avg', dir: 'DESC' },
+};
+
+export const PERIODS = { day: '1 day', week: '7 days', month: '30 days', year: '365 days' };
+
 /**
- * Video mới nhất trước, phân trang bằng keyset (createdAt, videoId): mỗi trang đúng `limit` phần tử,
- * lọc theo status không làm trang bị thiếu như GSI DynamoDB trước đây.
- * @param {{ limit: number, startKey?: { createdAt: string, videoId: string }, status?: string, ownerId?: string }}
- * @returns {Promise<{ items: Object[], lastKey: { createdAt: string, videoId: string } | undefined }>}
+ * Danh sách video, phân trang bằng keyset: mỗi trang đúng `limit` phần tử, không trùng hay sót
+ * khi có video mới chen vào giữa hai lần tải.
+ * Con trỏ là giá trị của hàng cuối trang: { value (cột sắp xếp), createdAt, videoId }.
+ * @param {{ limit: number, startKey?: { value?: string, createdAt: string, videoId: string },
+ *   status?: string, ownerId?: string, tier?: 'free' | 'premium', sort?: keyof SORTS,
+ *   period?: keyof PERIODS }} options
  */
-export async function listVideos({ limit, startKey, status, ownerId }) {
+export async function listVideos({ limit, startKey, status, ownerId, tier, sort = 'newest', period }) {
+  const { column, dir } = SORTS[sort] || SORTS.newest;
+  const cmp = dir === 'DESC' ? '<' : '>';
   const params = [];
   const where = [];
-  if (status) {
-    params.push(status);
-    where.push(`status = $${params.length}`);
-  }
-  if (ownerId) {
-    params.push(ownerId);
-    where.push(`owner_id = $${params.length}`);
-  }
+  const add = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  if (status) where.push(`status = ${add(status)}`);
+  if (ownerId) where.push(`owner_id = ${add(ownerId)}`);
+  if (tier) where.push(`tier = ${add(tier)}`);
+  if (period && PERIODS[period]) where.push(`created_at >= now() - ${add(PERIODS[period])}::interval`);
   if (startKey) {
-    params.push(startKey.createdAt, startKey.videoId);
-    where.push(`(created_at, video_id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+    const created = `${add(startKey.createdAt)}::timestamptz`;
+    const id = `${add(startKey.videoId)}::uuid`;
+    where.push(
+      column
+        ? `(${column}, created_at, video_id) ${cmp} (${add(startKey.value ?? '0')}::numeric, ${created}, ${id})`
+        : `(created_at, video_id) ${cmp} (${created}, ${id})`
+    );
   }
-  params.push(limit + 1);
+  const order = [column && `${column} ${dir}`, `created_at ${dir}`, `video_id ${dir}`].filter(Boolean).join(', ');
   const { rows } = await query(
     `SELECT * FROM videos ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-     ORDER BY created_at DESC, video_id DESC LIMIT $${params.length}`,
+     ORDER BY ${order} LIMIT ${add(limit + 1)}`,
     params
   );
   const items = rows.slice(0, limit).map(toVideo);
-  const last = items[items.length - 1];
+  const lastRow = rows[limit - 1];
   return {
     items,
-    lastKey: rows.length > limit ? { createdAt: last.createdAt, videoId: last.videoId } : undefined,
+    lastKey:
+      rows.length > limit
+        ? {
+            ...(column ? { value: String(lastRow[column]) } : {}),
+            createdAt: iso(lastRow.created_at),
+            videoId: lastRow.video_id,
+          }
+        : undefined,
   };
+}
+
+/** Tăng lượt xem (gọi khi cấp quyền phát thành công) */
+export async function incrementViews(videoId) {
+  const { rows } = await query(
+    'UPDATE videos SET view_count = view_count + 1 WHERE video_id = $1 RETURNING view_count',
+    [videoId]
+  );
+  return rows[0] ? Number(rows[0].view_count) : undefined;
+}
+
+/**
+ * Chấm 1-5 sao; chấm lại thì ghi đè. Tổng và số lượt chấm trên videos được tính lại trong cùng
+ * transaction, nên luôn khớp với video_ratings.
+ * @returns {Promise<{ ratingAvg: number, ratingCount: number, myRating: number }>}
+ */
+export async function rateVideo(videoId, userId, stars) {
+  return withTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO video_ratings (video_id, user_id, stars) VALUES ($1, $2, $3)
+       ON CONFLICT (video_id, user_id) DO UPDATE SET stars = EXCLUDED.stars, updated_at = now()`,
+      [videoId, userId, stars]
+    );
+    const { rows } = await client.query(
+      `UPDATE videos v SET rating_sum = r.sum, rating_count = r.count
+       FROM (SELECT coalesce(sum(stars), 0)::int AS sum, count(*)::int AS count
+             FROM video_ratings WHERE video_id = $1) r
+       WHERE v.video_id = $1
+       RETURNING v.rating_avg, v.rating_count`,
+      [videoId]
+    );
+    return { ratingAvg: Number(rows[0].rating_avg), ratingCount: rows[0].rating_count, myRating: stars };
+  });
+}
+
+/** Số sao người dùng đã chấm cho video, hoặc null */
+export async function getUserRating(videoId, userId) {
+  const { rows } = await query('SELECT stars FROM video_ratings WHERE video_id = $1 AND user_id = $2', [
+    videoId,
+    userId,
+  ]);
+  return rows[0]?.stars ?? null;
 }
 
 export async function deleteVideoRecord(videoId) {
