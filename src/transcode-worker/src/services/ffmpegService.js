@@ -269,7 +269,8 @@ export function transcodeHLSVariant(inputPath, outputDir, profile, meta, { signa
       ])
       .output(outputPath)
       .on('progress', (progress) => {
-        if (progress.percent) {
+        // Dòng tiến trình chỉ dùng khi chạy local; log JSON trên EKS mỗi dòng phải là một object
+        if (progress.percent && process.env.LOG_FORMAT !== 'json') {
           process.stdout.write(`[${profile.name}] ${Math.round(progress.percent)}% `);
         }
       })

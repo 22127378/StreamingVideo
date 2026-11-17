@@ -23,7 +23,7 @@ export function errorHandler(err, req, res, next) {
   }
 
   // Cập nhật có điều kiện thất bại (ví dụ 2 request /complete đồng thời)
-  if (err.name === 'ConditionalCheckFailedException') {
+  if (err.name === 'ConflictError' || err.name === 'ConditionalCheckFailedException') {
     console.warn(`[API 409] ${where}: conditional check failed`);
     return res.status(409).json({
       success: false,

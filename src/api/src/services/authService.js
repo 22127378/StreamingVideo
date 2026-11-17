@@ -30,15 +30,18 @@ export async function verifyToken(token) {
   if (config.auth.mode === 'cognito') {
     const payload = await verifier().verify(token);
     const groups = payload['cognito:groups'] || [];
+    const admin = groups.includes(config.auth.adminGroup);
     return {
       sub: payload.sub,
       username: payload.username,
-      tier: groups.includes(config.auth.premiumGroup) ? 'premium' : 'free',
+      // Admin xem được mọi video và quản lý video của mọi người
+      tier: admin || groups.includes(config.auth.premiumGroup) ? 'premium' : 'free',
+      admin,
     };
   }
 
   const payload = jwt.verify(token, config.auth.jwtSecret, { algorithms: ['HS256'], issuer: DEV_ISSUER });
-  return { sub: payload.sub, username: payload.email, email: payload.email, tier: payload.tier };
+  return { sub: payload.sub, username: payload.email, email: payload.email, tier: payload.tier, admin: false };
 }
 
 /** Chỉ ở chế độ dev: cấp token cho một email với gói tuỳ chọn */
@@ -79,6 +82,7 @@ export function publicAuthConfig() {
     return {
       mode: 'cognito',
       region: config.auth.region,
+      userPoolId: config.auth.userPoolId,
       clientId: config.auth.clientId,
       domain: config.auth.domain,
     };

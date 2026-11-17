@@ -100,6 +100,7 @@ function resolveAuth() {
       // Domain trang đăng nhập (https://xxx.auth.<region>.amazoncognito.com), frontend dùng để redirect
       domain: process.env.COGNITO_DOMAIN || '',
       premiumGroup: process.env.COGNITO_PREMIUM_GROUP || 'premium',
+      adminGroup: process.env.COGNITO_ADMIN_GROUP || 'admin',
     };
   }
 

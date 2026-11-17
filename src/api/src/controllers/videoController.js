@@ -11,11 +11,11 @@ import {
   getVideoById,
   listVideos as queryVideos,
   deleteVideoRecord,
-  VIDEO_ENTITY_TYPE,
-} from '../services/dynamoService.js';
+} from '../services/videoRepository.js';
 import { sendTranscodeJob } from '../services/sqsService.js';
 import { invalidateVideoCache } from '../services/cloudfrontService.js';
 import { canWatch, signedPlaybackCookies } from '../services/playbackService.js';
+import { playbackDecisions, uploadsCreated } from '../metrics.js';
 import { config } from '../config/aws.js';
 
 // Schemas validation
@@ -46,10 +46,9 @@ const ListVideosQuerySchema = z.object({
   nextToken: z.string().max(1024).optional(),
 });
 
-// Khóa phân trang của GSI: chỉ chấp nhận đúng 3 trường, tránh client chèn khóa tùy ý
+// Khoá phân trang keyset: chỉ chấp nhận đúng 2 trường, tránh client chèn giá trị tuỳ ý
 const CursorSchema = z.strictObject({
-  videoId: z.string().min(1).max(64),
-  entityType: z.literal(VIDEO_ENTITY_TYPE),
+  videoId: z.uuid(),
   createdAt: z.iso.datetime(),
 });
 
@@ -82,7 +81,7 @@ export function decodeCursor(token) {
  * Dữ liệu video trả cho client: bỏ trường nội bộ, thêm URL phát khi video đã READY
  */
 export function toPublicVideo(video) {
-  const { entityType, ...rest } = video;
+  const rest = { ...video };
   const ready = video.status === 'READY';
   // Luôn tính URL từ CDN_BASE_URL hiện tại, không dùng URL worker lưu lúc transcode,
   // để đổi domain hoặc đường dẫn CDN không làm hỏng link của video cũ
@@ -96,9 +95,12 @@ export function toPublicVideo(video) {
   };
 }
 
-/** Video tạo trước khi có đăng nhập không có ownerId: ai đăng nhập cũng quản lý được */
+/**
+ * Người dùng được quản lý video: chủ video, admin (group "admin"), hoặc bất kỳ ai đăng nhập
+ * với video tạo trước khi có đăng nhập (không có ownerId).
+ */
 function isOwner(user, video) {
-  return !video.ownerId || video.ownerId === user.sub;
+  return user.admin || !video.ownerId || video.ownerId === user.sub;
 }
 
 function forbiddenNotOwner(res) {
@@ -114,10 +116,14 @@ export async function startPlayback(req, res, next) {
   try {
     const { id } = VideoIdParamSchema.parse(req.params);
     const video = await getVideoById(id);
+    const decision = (result) =>
+      playbackDecisions.inc({ result, video_tier: video?.tier || 'unknown', user_tier: req.user.tier });
     if (!video) {
+      decision('not_found');
       return res.status(404).json({ success: false, message: `Video not found with ID: ${id}` });
     }
     if (video.status !== 'READY') {
+      decision('not_ready');
       return res.status(409).json({
         success: false,
         message: `Video chưa sẵn sàng để phát (trạng thái ${video.status})`,
@@ -125,6 +131,7 @@ export async function startPlayback(req, res, next) {
       });
     }
     if (!canWatch(req.user, video)) {
+      decision('denied_tier');
       return res.status(403).json({
         success: false,
         message: 'Video dành cho gói Premium',
@@ -133,6 +140,7 @@ export async function startPlayback(req, res, next) {
       });
     }
 
+    decision('allowed');
     const signed = signedPlaybackCookies(id);
     if (signed) {
       for (const [name, value] of Object.entries(signed.cookies)) {
@@ -189,6 +197,7 @@ export async function requestUploadUrl(req, res, next) {
       rawS3Key: s3Key,
     });
 
+    uploadsCreated.inc();
     res.status(201).json({
       success: true,
       message: 'Presigned upload URL generated successfully',

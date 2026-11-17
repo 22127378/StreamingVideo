@@ -65,19 +65,18 @@ test('GET and DELETE /api/videos/:id reject non-UUID ids', async () => {
 });
 
 test('cursor round-trips and rejects tampered keys', () => {
-  const key = { videoId: VIDEO_A, entityType: 'VIDEO', createdAt: '2026-11-16T07:00:00.000Z' };
+  const key = { videoId: VIDEO_A, createdAt: '2026-11-16T07:00:00.000Z' };
   assert.deepEqual(decodeCursor(encodeCursor(key)), key);
   assert.equal(encodeCursor(undefined), null);
 
   const tampered = Buffer.from(JSON.stringify({ ...key, extra: 'x' })).toString('base64url');
   assert.throws(() => decodeCursor(tampered), /nextToken/);
-  const wrongType = Buffer.from(JSON.stringify({ ...key, entityType: 'USER' })).toString('base64url');
-  assert.throws(() => decodeCursor(wrongType), /nextToken/);
+  const notUuid = Buffer.from(JSON.stringify({ ...key, videoId: "x' OR 1=1" })).toString('base64url');
+  assert.throws(() => decodeCursor(notUuid), /nextToken/);
 });
 
 test('toPublicVideo hides internal fields and adds URLs only when READY', () => {
-  const ready = toPublicVideo({ videoId: VIDEO_A, entityType: 'VIDEO', status: 'READY' });
-  assert.equal(ready.entityType, undefined);
+  const ready = toPublicVideo({ videoId: VIDEO_A, status: 'READY' });
   assert.equal(ready.streamingUrl, `${config.cdnBaseUrl}/${VIDEO_A}/master.m3u8`);
 
   // URL lưu từ cấu hình CDN cũ bị thay bằng URL tính từ CDN_BASE_URL hiện tại

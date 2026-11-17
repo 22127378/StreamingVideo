@@ -1,5 +1,10 @@
+import { installConsoleBridge } from './logger.js';
 import { startSQSConsumer } from './services/sqsConsumer.js';
 import { config } from './config/aws.js';
+import { startMetricsServer } from './metrics.js';
+
+installConsoleBridge();
+startMetricsServer();
 
 console.log('StreamForge Transcode Worker Service Started');
 console.log(`SQS Queue: ${config.transcodeQueueUrl}`);

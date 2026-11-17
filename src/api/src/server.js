@@ -1,5 +1,8 @@
+import { installConsoleBridge } from './logger.js';
 import { createApp } from './app.js';
 import { config } from './config/aws.js';
+
+installConsoleBridge();
 
 const app = createApp();
 

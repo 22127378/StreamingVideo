@@ -5,6 +5,8 @@ import authRoutes from './routes/authRoutes.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { createRateLimiter } from './middlewares/rateLimit.js';
 import { config } from './config/aws.js';
+import { logger } from './logger.js';
+import { httpRequestDuration, metricsHandler } from './metrics.js';
 
 export function createApp({ rateLimit = {} } = {}) {
   const app = express();
@@ -33,11 +35,23 @@ export function createApp({ rateLimit = {} } = {}) {
 
   // Request logger (bỏ qua health check của ALB/Kubernetes)
   app.use((req, res, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path === '/metrics') return next();
     const start = Date.now();
     res.on('finish', () => {
-      const duration = Date.now() - start;
-      console.log(`[${req.method}] ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+      // route là mẫu đường dẫn (/api/videos/:id) để gom nhóm trong Logs Insights
+      // Route không khớp (404) gom chung một nhãn để không tạo vô số chuỗi metric
+      const route = req.route ? `${req.baseUrl}${req.route.path}` : 'unmatched';
+      const durationMs = Date.now() - start;
+      httpRequestDuration.observe({ method: req.method, route, status: res.statusCode }, durationMs / 1000);
+      logger.info(`${req.method} ${req.originalUrl} ${res.statusCode}`, {
+        event: 'http_request',
+        method: req.method,
+        route,
+        status: res.statusCode,
+        durationMs,
+        ip: req.ip,
+        user: req.user?.sub,
+      });
     });
     next();
   });
@@ -51,6 +65,9 @@ export function createApp({ rateLimit = {} } = {}) {
       version: '1.0.0',
     });
   });
+
+  // Prometheus scrape (không đi qua ALB vì Ingress chỉ chuyển /api/*)
+  app.get('/metrics', metricsHandler);
 
   // API Routes
   app.post(['/api/videos/upload-url', '/api/videos/complete', '/api/auth/dev-login', '/api/auth/upgrade'], limitWrites);

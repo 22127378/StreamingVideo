@@ -8,8 +8,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { sqsClient, config } from '../config/aws.js';
+import { logger } from '../logger.js';
+import { transcodeDuration, transcodeInProgress, transcodeJobs } from '../metrics.js';
 import { downloadFileFromS3, uploadDirectoryToS3 } from './s3Service.js';
-import { updateVideoStatus } from './dynamoService.js';
+import { updateVideoStatus } from './videoRepository.js';
 import {
   probeVideo,
   generateThumbnail,
@@ -101,7 +103,16 @@ export function assertWithinLimits(meta, limits = config) {
   }
 }
 
-export const UUID_RE =/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function safeVideoId(message) {
+  try {
+    const id = JSON.parse(message.Body).videoId;
+    return UUID_RE.test(id || '') ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Quyết định cách xử lý một lần thất bại dựa trên số lần message đã được nhận.
@@ -168,7 +179,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     try {
       await updateVideoStatus(videoId, 'PROCESSING', { attempt: receiveCount });
     } catch (err) {
-      if (err.name !== 'ConditionalCheckFailedException') throw err;
+      if (err.name !== 'VideoGoneError') throw err;
       await deleteMessage(message.ReceiptHandle);
       console.warn(`[Worker] Video ${videoId} không còn tồn tại hoặc đang bị xóa, bỏ qua job`);
       return 'skipped';
@@ -329,7 +340,25 @@ export async function startSQSConsumer({ stopSignal, jobSignal } = {}) {
         continue;
       }
       try {
-        await processTranscodeMessage(message, { signal: jobSignal });
+        const started = Date.now();
+        transcodeInProgress.inc();
+        let outcome;
+        try {
+          outcome = await processTranscodeMessage(message, { signal: jobSignal });
+        } finally {
+          transcodeInProgress.dec();
+        }
+        const seconds = (Date.now() - started) / 1000;
+        transcodeJobs.inc({ outcome });
+        if (outcome === 'done') transcodeDuration.observe(seconds);
+        // Một sự kiện cho mỗi job: metric filter của CloudWatch đếm theo outcome và đo durationSeconds
+        logger.info(`transcode ${outcome}`, {
+          event: 'transcode_finished',
+          outcome,
+          videoId: safeVideoId(message),
+          attempt: parseInt(message.Attributes?.ApproximateReceiveCount || '1', 10),
+          durationSeconds: Math.round(seconds * 10) / 10,
+        });
       } catch (processErr) {
         console.error(`[Worker] Lỗi xử lý message:`, processErr.message);
       }

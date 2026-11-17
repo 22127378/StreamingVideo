@@ -34,8 +34,8 @@ export function devLogin(req, res, next) {
  * [GET /api/auth/me] người dùng hiện tại và gói của họ
  */
 export function getMe(req, res) {
-  const { sub, email, tier } = req.user;
-  res.status(200).json({ success: true, data: { sub, email, tier } });
+  const { sub, email, tier, admin } = req.user;
+  res.status(200).json({ success: true, data: { sub, email, tier, admin } });
 }
 
 /**
