@@ -1,0 +1,42 @@
+# Prometheus scrape /metrics của API (qua Service) và worker (trực tiếp pod, cổng 9464)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+spec:
+  selector:
+    matchLabels:
+      app: streamforge-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: streamforge-worker
+  namespace: streamforge
+spec:
+  selector:
+    matchLabels:
+      app: streamforge-worker
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+---
+# KEDA operator: metric về scaler (lỗi đọc SQS, giá trị độ dài queue)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: keda-operator
+  namespace: keda
+spec:
+  selector:
+    matchLabels:
+      app: keda-operator
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s

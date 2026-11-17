@@ -1,0 +1,82 @@
+# Grafana Alloy: gom log mọi pod và sự kiện Kubernetes, đẩy vào Loki.
+# Chạy 1 Deployment, đọc log qua Kubernetes API (loki.source.kubernetes) nên không cần hostPath hay
+# DaemonSet trên từng máy (máy của EKS Auto Mode bị khoá chặt).
+controller:
+  type: deployment
+  replicas: 1
+
+alloy:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  configMap:
+    create: true
+    content: |
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Chỉ pod đang chạy
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          regex         = "Pending|Succeeded|Failed|Unknown"
+          action        = "drop"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app", "__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          separator     = ""
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.streamforge.receiver]
+      }
+
+      // Log của API và worker là JSON (LOG_FORMAT=json): tách level và event thành label để lọc nhanh.
+      // Các trường khác (videoId, route, durationMs...) để trong nội dung, truy vấn bằng | json trong LogQL.
+      loki.process "streamforge" {
+        stage.match {
+          selector = "{namespace=\"streamforge\"}"
+          stage.json {
+            expressions = { level = "level", event = "event", service = "service" }
+          }
+          stage.labels {
+            values = { level = "", event = "", service = "" }
+          }
+        }
+        forward_to = [loki.write.default.receiver]
+      }
+
+      // Sự kiện Kubernetes (pod bị kill, image pull lỗi, scale...) cũng vào Loki
+      loki.source.kubernetes_events "events" {
+        job_name   = "kubernetes-events"
+        log_format = "json"
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }

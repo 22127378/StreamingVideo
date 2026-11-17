@@ -1,0 +1,117 @@
+# kube-prometheus-stack: Prometheus, Alertmanager, Grafana, kube-state-metrics, Prometheus Operator.
+# Giá trị riêng của tài khoản (SNS topic, domain) được install.sh truyền qua --set.
+
+# Rule mặc định: giữ vì các dashboard Kubernetes có sẵn cần recording rule của chúng.
+# Tắt nhóm dựa vào thành phần không có trên EKS Auto Mode. Cảnh báo mặc định chỉ hiện trong Grafana;
+# Alertmanager chỉ gửi email cho cảnh báo StreamForge* (rules.yaml), xem route trong install.sh.
+defaultRules:
+  create: true
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+    node: false
+
+# EKS quản lý control plane: không scrape được etcd/scheduler/controller-manager/kube-proxy.
+# Máy của EKS Auto Mode không cho pod dùng mạng và PID của máy, nên không chạy node-exporter;
+# CPU/RAM container vẫn có qua kubelet/cAdvisor.
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+nodeExporter:
+  enabled: false
+
+prometheusOperator:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: 15GB
+    scrapeInterval: 30s
+    # Lấy mọi ServiceMonitor/PodMonitor/PrometheusRule trong cụm, không chỉ của chart này
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 200m, memory: 768Mi }
+      limits: { memory: 1536Mi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: auto-ebs-sc
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+alertmanager:
+  serviceAccount:
+    create: true
+    # Khớp aws_eks_pod_identity_association "alertmanager" (terraform/layers/observability): được sns:Publish
+    name: alertmanager
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { memory: 128Mi }
+  # route/receivers do install.sh điền (cần ARN của SNS topic)
+
+grafana:
+  serviceAccount:
+    create: true
+    # Khớp aws_eks_pod_identity_association "grafana": đọc CloudWatch (SQS, CloudFront, audit EKS)
+    name: grafana
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { memory: 384Mi }
+  # Dashboard được nạp từ ConfigMap có nhãn grafana_dashboard=1 (k8s/monitoring/dashboards)
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  grafana.ini:
+    server:
+      # domain/root_url do install.sh điền: Grafana chạy dưới https://<cloudfront>/grafana
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: false
+    users:
+      allow_sign_up: false
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      url: http://loki.monitoring.svc.cluster.local:3100
+      jsonData:
+        maxLines: 1000
+    - name: CloudWatch
+      uid: cloudwatch
+      type: cloudwatch
+      jsonData:
+        # Dùng credentials của pod (EKS Pod Identity)
+        authType: default
+        defaultRegion: us-east-1

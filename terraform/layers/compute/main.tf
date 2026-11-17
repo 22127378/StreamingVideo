@@ -58,6 +58,11 @@ module "eks" {
   # Người chạy terraform apply có quyền admin trong cluster (access entry)
   enable_cluster_creator_admin_permissions = true
 
+  # Log control plane lên CloudWatch: audit (ai làm gì trong cụm) và authenticator (ai đăng nhập).
+  # Bỏ "api" vì quá nhiều (~4.7 GB/tháng chỉ với cụm nhỏ này).
+  enabled_log_types                      = ["audit", "authenticator"]
+  cloudwatch_log_group_retention_in_days = 7
+
   compute_config = {
     enabled = true
     # Giữ các pool có sẵn để Auto Mode tạo NodeClass "default"; NodePool riêng (k8s/cluster/)

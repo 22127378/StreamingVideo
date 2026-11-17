@@ -1,0 +1,68 @@
+# Cảnh báo của StreamForge: Prometheus -> Alertmanager -> SNS -> email.
+# Cảnh báo về SQS và CloudFront nằm ở CloudWatch (terraform/layers/observability) để vẫn chạy khi cụm lỗi.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: streamforge
+  namespace: monitoring
+spec:
+  groups:
+    - name: streamforge-api
+      rules:
+        - alert: StreamForgeApiDown
+          expr: sum(up{job="streamforge-api"}) < 1 or absent(up{job="streamforge-api"})
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: Không pod API nào trả lời Prometheus trong 5 phút
+            description: Kiểm tra kubectl -n streamforge get pods và log của streamforge-api trong Grafana.
+
+        - alert: StreamForgeApiHigh5xxRate
+          expr: |
+            sum(rate(streamforge_http_request_duration_seconds_count{status=~"5.."}[5m]))
+              / sum(rate(streamforge_http_request_duration_seconds_count[5m])) > 0.05
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Hơn 5% request API lỗi 5xx ({{ $value | humanizePercentage }})"
+
+        - alert: StreamForgeApiSlow
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(streamforge_http_request_duration_seconds_bucket{route!="unmatched"}[5m]))) > 1.5
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "p95 thời gian xử lý của API là {{ $value | humanizeDuration }} (ngưỡng 1.5s)"
+
+    - name: streamforge-transcode
+      rules:
+        - alert: StreamForgeTranscodeFailed
+          expr: sum(increase(streamforge_transcode_jobs_total{outcome=~"failed|rejected"}[15m])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value | humanize }} video transcode thất bại hoặc bị từ chối trong 15 phút"
+            description: 'Trong Grafana Explore (Loki): {namespace="streamforge", event="transcode_finished"} | json'
+
+        - alert: StreamForgeWorkerUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="streamforge", deployment="streamforge-worker"} < 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: Không có worker transcode nào sẵn sàng trong 15 phút (mức provisioned là 1)
+            description: Thường do không xin được máy Spot. Xem kubectl get nodeclaims và sự kiện Kubernetes trong Loki.
+
+    - name: streamforge-platform
+      rules:
+        - alert: StreamForgePodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"streamforge|keda|monitoring"}[15m]) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} restart {{ $value | humanize }} lần trong 15 phút"
+
+        - alert: StreamForgeScrapeTargetDown
+          expr: up{namespace=~"streamforge|keda"} == 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Prometheus không scrape được {{ $labels.job }} ({{ $labels.instance }})"
