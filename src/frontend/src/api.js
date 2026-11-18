@@ -1,4 +1,9 @@
-// Gọi API StreamForge. Frontend và API cùng domain (CloudFront /api/*, hoặc proxy của Vite khi dev).
+// Gọi các service StreamForge. Frontend và API cùng domain (CloudFront /api/*, hoặc proxy của Vite khi dev).
+// ALB (local: gateway nginx) chia đường dẫn về từng service:
+//   /api/auth/*      account     đăng nhập, gói
+//   /api/uploads/*   upload      xin URL upload, xác nhận upload xong
+//   /api/videos/*    catalog     danh sách, chi tiết, đánh giá, xoá
+//   /api/playback/*  playback    cấp vé xem (signed cookies)
 import { getAccessToken } from './auth.js';
 
 export class ApiError extends Error {
@@ -39,12 +44,13 @@ export const listMyVideos = ({ limit = 24, nextToken } = {}) => request('GET', `
 
 export const rateVideo = (id, stars) => request('PUT', `/videos/${id}/rating`, { body: { stars } });
 
+/** Chi tiết video; đã đăng nhập thì có thêm myRating (số sao mình đã chấm) */
 export const getVideo = (id) => request('GET', `/videos/${id}`);
 
 export const deleteVideo = (id) => request('DELETE', `/videos/${id}`);
 
 export const requestUpload = ({ file, title, tier }) =>
-  request('POST', '/videos/upload-url', {
+  request('POST', '/uploads', {
     body: {
       fileName: file.name,
       contentType: file.type,
@@ -54,13 +60,13 @@ export const requestUpload = ({ file, title, tier }) =>
     },
   });
 
-export const completeUpload = (videoId) => request('POST', '/videos/complete', { body: { videoId } });
+export const completeUpload = (videoId) => request('POST', `/uploads/${videoId}/complete`);
 
 /**
- * Xin quyền xem: API kiểm tra gói rồi đặt CloudFront signed cookies cho /videos/{id}/.
+ * Xin quyền xem: playback-service kiểm tra gói rồi đặt CloudFront signed cookies cho /videos/{id}/.
  * Sau đó trình phát tải HLS bình thường, trình duyệt tự gửi cookie (cùng domain).
  */
-export const startPlayback = (id) => request('POST', `/videos/${id}/playback`);
+export const startPlayback = (id) => request('POST', `/playback/${id}`);
 
 export const getMe = () => request('GET', '/auth/me');
 

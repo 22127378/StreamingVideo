@@ -16,7 +16,7 @@ npm install
 npm run dev          # http://localhost:5173, /api chuyển tới http://localhost:4000
 ```
 
-API phải đang chạy (`npm run dev` trong `src/api`, hoặc `docker compose --profile app up`). Đặt `API_URL` để trỏ `/api` tới chỗ khác. Bucket raw phải cho phép origin `http://localhost:5173` trong CORS (LocalStack đã mở sẵn).
+Các service phải đang chạy (`docker compose --profile app up -d --build`, gateway ở cổng 4000). Đặt `API_URL` để trỏ `/api` tới chỗ khác. Bucket raw phải cho phép origin `http://localhost:5173` trong CORS (LocalStack đã mở sẵn).
 
 ## Deploy
 

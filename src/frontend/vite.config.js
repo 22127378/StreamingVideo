@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Khi dev, /api được chuyển tới API chạy trên máy (npm run dev trong src/api).
+// Khi dev, /api được chuyển tới gateway của docker compose (cổng 4000), gateway chia về từng service.
 // Khi deploy, frontend và API cùng nằm sau một CloudFront nên /api là cùng domain.
 export default defineConfig({
   plugins: [react()],

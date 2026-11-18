@@ -8,7 +8,8 @@ import { href } from '../router.js';
 const Player = lazy(() => import('../components/Player.jsx'));
 
 /**
- * Trang xem: xin quyền phát (API kiểm tra gói, đặt signed cookie, tăng lượt xem) rồi phát HLS.
+ * Trang xem: xin quyền phát (playback-service kiểm tra gói, đặt signed cookie, phát sự kiện lượt xem)
+ * rồi phát HLS.
  * Gói Free nhận master playlist chỉ tới 720p; CloudFront chặn luôn file 1080p với cookie của gói Free.
  */
 export default function WatchPage({ id, user, onLogin, onUpgrade, upgrading }) {
@@ -33,8 +34,9 @@ export default function WatchPage({ id, user, onLogin, onUpgrade, upgrading }) {
     }
     try {
       const { data } = await startPlayback(id);
-      setPlayback({ state: 'allowed', ...data });
-      setVideo((v) => ({ ...v, viewCount: data.viewCount ?? v.viewCount }));
+      // Lượt xem được catalog cộng qua sự kiện (vài giây sau); hiển thị trước +1 cho người đang xem
+      setPlayback({ state: 'allowed', ...data, myRating: info.myRating ?? null });
+      setVideo((v) => ({ ...v, viewCount: (v.viewCount || 0) + 1 }));
     } catch (err) {
       if (err.status === 401) setPlayback({ state: 'login' });
       else if (err.status === 403) setPlayback({ state: 'denied', message: err.message });
