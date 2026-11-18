@@ -15,6 +15,19 @@ configs:
   cm:
     # Kiểm tra Git mỗi 3 phút. Ngắn hơn thì GitHub dễ giới hạn request ẩn danh (repo public).
     timeout.reconciliation: 180s
+    # App-of-Apps: Application con chỉ coi là xong khi đã Healthy, để sync-wave chờ được nhau
+    # (KEDA, Argo Rollouts cài xong rồi mới tới app dùng CRD của chúng)
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil and obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then
+          hs.message = obj.status.health.message
+        end
+      end
+      return hs
     # ArgoCD không tự đánh giá health của ScaledJob; coi là khoẻ khi điều kiện Ready = True
     resource.customizations.health.keda.sh_ScaledJob: |
       hs = {}
@@ -36,7 +49,7 @@ configs:
       hs.message = "Waiting for KEDA"
       return hs
 
-# Tài nguyên nhỏ: cụm chỉ có một Application
+# Tài nguyên nhỏ: cụm chỉ có vài Application
 controller:
   resources:
     requests: { cpu: 100m, memory: 256Mi }

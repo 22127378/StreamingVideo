@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Cài ArgoCD lên cụm EKS và tạo Application "streamforge" (GitOps cho k8s/gitops/dev).
-# Chạy sau k8s/deploy.sh lần đầu (cần namespace, secret, KEDA đã có).
+# Cài ArgoCD lên cụm EKS và tạo Application gốc "root" (App-of-Apps) trỏ vào repo cấu hình.
+# Từ đó ArgoCD tự cài cluster, KEDA, Argo Rollouts và ứng dụng (xem README của repo cấu hình).
+# Chạy sau k8s/deploy.sh lần đầu (cần namespace và secret).
 #
 #   ./k8s/argocd/install.sh
+#   CONFIG_REPO_URL=https://github.com/<owner>/<repo>.git ./k8s/argocd/install.sh
 #
 # Mở UI: kubectl -n argocd port-forward svc/argocd-server 8443:443  rồi vào https://localhost:8443
 # Tài khoản admin, mật khẩu:
@@ -18,7 +20,10 @@ helm upgrade --install argocd argo/argo-cd --version "$CHART_VERSION" \
   --namespace argocd --create-namespace --wait --timeout 10m \
   -f "$ROOT/k8s/argocd/values.yaml"
 
-kubectl apply -f "$ROOT/k8s/argocd/application.yaml"
+CONFIG_REPO_URL=${CONFIG_REPO_URL:-https://github.com/22127378/StreamingVideo-config.git}
+sed "s#repoURL: https://github.com/22127378/StreamingVideo-config.git#repoURL: $CONFIG_REPO_URL#"   "$ROOT/k8s/argocd/root-app.yaml" | kubectl apply -f -
+# Application "streamforge" cũ (trỏ vào k8s/gitops/dev) trùng tên với Application con mới trong
+# apps/streamforge.yaml, nên root ghi đè spec của nó: không cần xoá tay.
 echo
-echo "ArgoCD đã cài. Application streamforge theo dõi k8s/gitops/dev trên nhánh main."
-echo "Trạng thái: kubectl -n argocd get application streamforge"
+echo "ArgoCD đã cài. Application root theo dõi apps/ của $CONFIG_REPO_URL."
+echo "Trạng thái: kubectl -n argocd get applications"

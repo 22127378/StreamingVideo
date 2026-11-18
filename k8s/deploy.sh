@@ -5,13 +5,16 @@
 # Chạy lại an toàn: image đã có trên ECR thì bỏ qua build.
 #
 # Script làm phần "bootstrap" trực tiếp trên cụm (NodePool, KEDA, namespace, secret), rồi ghi
-# k8s/gitops/dev (tag image, cấu hình) để commit. Từ đó:
-#   - Có ArgoCD (k8s/argocd/install.sh): commit + push k8s/gitops/dev, ArgoCD tự đồng bộ.
+# envs/dev của repo cấu hình (StreamingVideo-config, mặc định clone cạnh repo này) để commit. Từ đó:
+#   - Có ArgoCD (k8s/argocd/install.sh): commit + push repo cấu hình, ArgoCD tự đồng bộ.
 #   - Chưa có ArgoCD (lần đầu): script tự chạy migration và apply thư mục đó.
+# Bình thường image do CI build và đẩy lên ECR (GitHub OIDC), CI cũng ghi tag vào repo cấu hình;
+# script chỉ build khi image của commit hiện tại chưa có trên ECR.
 #
-#   ./k8s/deploy.sh                # build + chuẩn bị + ghi k8s/gitops/dev
+#   ./k8s/deploy.sh                # build + chuẩn bị + ghi envs/dev của repo cấu hình
 #   SKIP_BUILD=1 ./k8s/deploy.sh   # giữ tag image hiện tại, chỉ cập nhật cấu hình
 #   DIRECT_APPLY=1 ./k8s/deploy.sh # apply thẳng kể cả khi đã có ArgoCD (ArgoCD selfHeal sẽ đưa về Git)
+#   CONFIG_REPO_DIR=/path/to/StreamingVideo-config ./k8s/deploy.sh
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,8 +27,16 @@ KEDA_VERSION=2.20.2
 PLACEHOLDER_REPLICAS=${PLACEHOLDER_REPLICAS:-1}
 PLACEHOLDER_START=${PLACEHOLDER_START:-0 8 * * *}
 PLACEHOLDER_END=${PLACEHOLDER_END:-0 0 * * *}
-# Thư mục ArgoCD đồng bộ (commit vào Git)
-GITOPS="$ROOT/k8s/gitops/dev"
+# Repo cấu hình (ArgoCD đồng bộ envs/dev của nó)
+CONFIG_REPO_DIR=${CONFIG_REPO_DIR:-$ROOT/../StreamingVideo-config}
+if [[ ! -d $CONFIG_REPO_DIR/.git ]]; then
+  echo "Config repository not found at $CONFIG_REPO_DIR (clone it there or set CONFIG_REPO_DIR)" >&2
+  exit 1
+fi
+GITOPS="$CONFIG_REPO_DIR/envs/dev"
+# Manifest gốc lấy từ repo code (GitHub) ghim theo commit; commit này phải đã được push
+BASE_REF=${BASE_REF:-$(git -C "$ROOT" rev-parse HEAD)}
+CODE_REPO_URL=${CODE_REPO_URL:-https://github.com/22127378/StreamingVideo}
 
 tf_out() { terraform -chdir="$TF/$1" output -raw "$2"; }
 log() { printf '\n==> %s\n' "$*"; }
@@ -85,7 +96,7 @@ if [[ -z ${SKIP_BUILD:-} ]]; then
   done
   build_push "$WORKER_REPO" docker/worker.Dockerfile
 else
-  # Giữ tag đang ghi trong k8s/gitops/dev
+  # Giữ tag đang ghi trong envs/dev của repo cấu hình
   TAG=$(awk '/name: streamforge-catalog/{f=1} f && /newTag:/{print $2; exit}' "$GITOPS/kustomization.yaml")
   echo "SKIP_BUILD: keeping image tag $TAG"
 fi
@@ -97,6 +108,10 @@ log "Cluster resources (NodePools, IngressClass)"
 kubectl apply -f "$ROOT/k8s/cluster/"
 
 log "KEDA $KEDA_VERSION"
+# Khi đã có ArgoCD, KEDA do Application "keda" (repo cấu hình) quản lý
+if kubectl -n argocd get application keda >/dev/null 2>&1; then
+  echo "KEDA is managed by ArgoCD, skipping"
+else
 # helm upgrade --wait mất vài phút kể cả khi không đổi gì, nên bỏ qua nếu đã đúng phiên bản.
 # FORCE_KEDA=1 để cài lại, ví dụ khi đổi các --set bên dưới.
 installed_keda=$(helm -n keda list --filter '^keda$' --deployed -o json 2>/dev/null | jq -r '.[0].chart // empty')
@@ -109,6 +124,7 @@ else
     --namespace keda --create-namespace --wait --timeout 10m \
     --set podIdentity.aws.irsa.enabled=false \
     --set prometheus.operator.enabled=true
+fi
 fi
 
 log "Namespace and secrets"
@@ -160,13 +176,16 @@ for svc in "${SERVICES[@]}" worker; do
 "
 done
 cat > "$GITOPS/kustomization.yaml" <<EOF
-# Sinh bởi k8s/deploy.sh. ArgoCD (k8s/argocd/application.yaml) đồng bộ thư mục này lên cụm.
-# Các giá trị là định danh tài nguyên AWS, không phải bí mật; secret được tạo ngoài Git.
+# Môi trường dev của StreamForge. ArgoCD (apps/streamforge.yaml) đồng bộ thư mục này lên cụm.
+# - Manifest gốc lấy từ repo code, ghim theo commit (ref) cùng commit với tag image bên dưới.
+#   CI của repo code cập nhật cả ref và newTag sau khi image qua test, Checkov và Trivy.
+# - config.env, migrate.env và các patch (ID tài nguyên AWS, không phải bí mật) do k8s/deploy.sh
+#   của repo code ghi. Secret được tạo ngoài Git.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../../app/base
-  - ../../db
+  - $CODE_REPO_URL//k8s/app/base?ref=$BASE_REF
+  - $CODE_REPO_URL//k8s/db?ref=$BASE_REF
 configurations:
   - kustomizeconfig.yaml
 images:
@@ -242,9 +261,9 @@ kubectl kustomize "$GITOPS" >/dev/null
 
 if kubectl -n argocd get application streamforge >/dev/null 2>&1 && [[ -z ${DIRECT_APPLY:-} ]]; then
   log "ArgoCD manages the app"
-  git -C "$ROOT" status --short -- k8s/gitops/dev
-  echo "Commit and push k8s/gitops/dev; ArgoCD syncs within ~3 minutes (migration runs first)."
-  echo "Status: kubectl -n argocd get application streamforge"
+  git -C "$CONFIG_REPO_DIR" status --short -- envs/dev
+  echo "Commit and push $CONFIG_REPO_DIR; ArgoCD syncs within ~3 minutes (migration runs first)."
+  echo "Status: kubectl -n argocd get applications; kubectl argo rollouts -n streamforge list rollouts"
   exit 0
 fi
 

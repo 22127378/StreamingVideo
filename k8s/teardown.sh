@@ -12,7 +12,8 @@
 #   terraform -chdir=terraform/layers/database apply      # rule security group từ cụm vào Aurora
 #   terraform -chdir=terraform/layers/services apply      # Pod Identity của service, quyền của worker
 #   terraform -chdir=terraform/layers/observability apply # Pod Identity của Loki, Alertmanager, Grafana
-#   ./k8s/deploy.sh && ./k8s/monitoring/install.sh        # (và ./k8s/argocd/install.sh nếu dùng ArgoCD)
+#   ./k8s/deploy.sh && ./k8s/argocd/install.sh            # ArgoCD cài KEDA, Argo Rollouts và app
+#   ./k8s/monitoring/install.sh
 #   # ALB mới có DNS mới: cập nhật api_alb_dns_name trong terraform/layers/delivery/terraform.tfvars
 #   terraform -chdir=terraform/layers/delivery apply
 set -euo pipefail
@@ -29,8 +30,12 @@ fi
 
 log "Removing workloads so controllers delete the ALB and EBS volumes"
 if kubectl get ns >/dev/null 2>&1; then
+  # Application con có finalizer: gỡ trước, không thì namespace argocd kẹt khi ArgoCD đã bị gỡ
+  for app in $(kubectl -n argocd get applications -o name 2>/dev/null); do
+    kubectl -n argocd patch "$app" --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null || true
+  done
   helm -n argocd uninstall argocd >/dev/null 2>&1 || true # ArgoCD sẽ tạo lại tài nguyên nếu còn chạy
-  kubectl delete ns streamforge monitoring argocd --ignore-not-found --wait=true --timeout=10m || true
+  kubectl delete ns streamforge monitoring argocd argo-rollouts keda --ignore-not-found --wait=true --timeout=10m || true
   # Ingress bị xoá thì AWS Load Balancer Controller của Auto Mode gỡ ALB; chờ cho chắc
   for _ in $(seq 1 60); do
     n=$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?starts_with(LoadBalancerName, 'k8s-streamforge')])" --output text)

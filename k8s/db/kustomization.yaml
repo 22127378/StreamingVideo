@@ -1,5 +1,5 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Không dùng trực tiếp: k8s/gitops/dev thêm image, cấu hình và annotation hook của ArgoCD
+# Không dùng trực tiếp: envs/dev của repo cấu hình thêm image, cấu hình và annotation hook của ArgoCD
 resources:
   - migrate-job.yaml

@@ -1,0 +1,21 @@
+# Application gốc (App-of-Apps): đồng bộ thư mục apps/ của repo cấu hình. Mỗi file trong đó là một
+# Application con (cluster, keda, argo-rollouts, streamforge), chạy theo sync-wave.
+# install.sh thay repoURL bằng CONFIG_REPO_URL nếu đặt biến này.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/22127378/StreamingVideo-config.git
+    targetRevision: main
+    path: apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
