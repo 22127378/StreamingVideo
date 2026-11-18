@@ -148,8 +148,15 @@ jobs:
 
   image:
     name: Build and scan ${{ matrix.service }} image
-    needs: test
+    needs: [test, checkov]
     runs-on: ubuntu-24.04
+    # id-token: GitHub OIDC để assume role CI trên AWS (terraform/layers/cicd), không có key tĩnh
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Chỉ push khi chạy trên main và đã cấu hình role (Settings > Variables > AWS_CI_ROLE_ARN)
+      PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_CI_ROLE_ARN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -187,3 +194,31 @@ jobs:
             --ignore-unfixed \
             --exit-code 1 \
             streamforge-${{ matrix.service }}:${{ github.sha }}
+
+      # Image đã qua test, Checkov và Trivy mới được đẩy lên ECR. Tag là 7 ký tự đầu của commit SHA,
+      # giống k8s/deploy.sh; ECR đặt tag immutable nên image đã có thì bỏ qua.
+      - name: Assume the CI role through GitHub OIDC
+        if: env.PUSH == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Log in to ECR
+        if: env.PUSH == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push image to ECR
+        if: env.PUSH == 'true'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY_PREFIX || 'streamforge-dev' }}-${{ matrix.service }}
+        run: |
+          tag=${GITHUB_SHA::7}
+          if aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+            echo "$REPOSITORY:$tag already in ECR"
+            exit 0
+          fi
+          docker tag "streamforge-${{ matrix.service }}:$GITHUB_SHA" "$REGISTRY/$REPOSITORY:$tag"
+          docker push "$REGISTRY/$REPOSITORY:$tag"
