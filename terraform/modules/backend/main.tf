@@ -7,6 +7,23 @@ resource "aws_kms_key" "state" {
   description             = "${var.name_prefix} Terraform state"
   enable_key_rotation     = true
   deletion_window_in_days = 7
+  # Giống key policy mặc định của KMS (account quản lý quyền qua IAM), nhưng ghi rõ trong code
+  policy = data.aws_iam_policy_document.state_key.json
+}
+
+data "aws_iam_policy_document" "state_key" {
+  #checkov:skip=CKV_AWS_109:Key policy: "*" is this key only, and access is delegated to IAM in the same account (the KMS default policy)
+  #checkov:skip=CKV_AWS_111:Same as above
+  #checkov:skip=CKV_AWS_356:Same as above
+  statement {
+    sid       = "AccountAdministersKeyThroughIam"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
 }
 
 resource "aws_kms_alias" "state" {
@@ -65,6 +82,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
     filter {}
     noncurrent_version_expiration {
       noncurrent_days = 90
+    }
+  }
+
+  rule {
+    id     = "abort-incomplete-multipart"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
     }
   }
 

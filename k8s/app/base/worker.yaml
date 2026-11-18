@@ -35,6 +35,8 @@ spec:
         # Job: process thoát là xong, không khởi động lại tại chỗ. Lỗi transcode được thử lại qua SQS.
         restartPolicy: Never
         serviceAccountName: streamforge-worker
+        # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+        automountServiceAccountToken: false
         # Cao hơn pod giữ chỗ (transcode-placeholder.yaml): được chạy ngay trên node đã ấm
         priorityClassName: streamforge-transcode
         # Lớn hơn SHUTDOWN_GRACE_SECONDS (25s) để worker kịp trả message về queue

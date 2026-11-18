@@ -32,6 +32,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
+  #checkov:skip=CKV_AWS_300:The first rule aborts incomplete multipart uploads for the whole bucket; the expire rule only covers a prefix
   bucket = aws_s3_bucket.this.id
 
   rule {

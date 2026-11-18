@@ -23,6 +23,8 @@ spec:
         app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -63,6 +65,8 @@ spec:
         app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

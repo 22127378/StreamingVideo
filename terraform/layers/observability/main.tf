@@ -41,6 +41,7 @@ variable "log_retention_days" {
 
 # ---------------- Kênh cảnh báo
 resource "aws_sns_topic" "alerts" {
+  #checkov:skip=CKV_AWS_26:CloudWatch alarms cannot publish to a topic encrypted with the AWS managed SNS key, and alert texts hold no sensitive data
   name = "${local.name_prefix}-alerts"
 }
 
@@ -93,6 +94,7 @@ data "aws_iam_policy_document" "alertmanager" {
 
 # Datasource CloudWatch của Grafana: đọc metric và log (SQS, CloudFront, audit EKS), không ghi gì
 data "aws_iam_policy_document" "grafana" {
+  #checkov:skip=CKV_AWS_356:CloudWatch metric reads, Logs Insights queries and tag:GetResources do not support resource-level permissions; read-only actions
   statement {
     sid = "ReadMetrics"
     actions = [

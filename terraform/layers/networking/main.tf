@@ -13,6 +13,7 @@ variable "vpc_cidr" {
 }
 
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:The VPC module takes the first zones once; subnets are not recreated if the list changes later
   state = "available"
 }
 

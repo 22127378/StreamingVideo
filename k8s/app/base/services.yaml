@@ -33,6 +33,8 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-account
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -142,6 +144,8 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-upload
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -256,6 +260,8 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-catalog
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -354,6 +360,8 @@ metadata:
   labels:
     app: streamforge-playback
     streamforge.io/tier: http
+  annotations:
+    checkov.io/skip1: CKV_K8S_35=The signing key is read once at startup from a Secret; the env var is never logged
 spec:
   replicas: 2
   selector:
@@ -370,6 +378,8 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-playback
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

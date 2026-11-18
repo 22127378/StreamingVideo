@@ -1,0 +1,41 @@
+# Cấu hình Checkov cho CI (.github/workflows/ci.yml, job "checkov").
+# Chỉ những quyết định áp dụng cho cả dự án nằm ở đây, mỗi check đều có lý do.
+# Ngoại lệ của một tài nguyên cụ thể ghi ngay tại tài nguyên đó:
+#   Terraform:  #checkov:skip=<ID>:<lý do>      Kubernetes: annotation checkov.io/skipN: <ID>=<lý do>
+compact: true
+quiet: true
+skip-check:
+  # ---- Terraform
+  # Mã hoá at-rest dùng khoá do AWS quản lý (S3 SSE, ECR AES256, Aurora, DynamoDB, CloudWatch Logs).
+  # Mỗi CMK tốn $1/tháng cộng phí request; chỉ Terraform state dùng CMK riêng (modules/backend).
+  - CKV_AWS_136 # ECR encrypted with KMS
+  - CKV_AWS_327 # Aurora encrypted with a CMK
+  - CKV_AWS_354 # Performance Insights encrypted with a CMK
+  - CKV_AWS_158 # CloudWatch log group encrypted with KMS
+  - CKV_AWS_119 # DynamoDB encrypted with a CMK
+  - CKV_AWS_145 # S3 encrypted with KMS
+  # Môi trường dev: log CloudWatch chỉ giữ vài tuần (retention_in_days ở từng layer), không phải 1 năm
+  - CKV_AWS_338
+  # Bucket video và web dựng lại được (upload lại, transcode lại, build lại frontend). Không replication
+  # liên vùng, không versioning, không access log riêng (CloudFront đã có log ở CloudWatch)
+  - CKV_AWS_144 # cross-region replication
+  - CKV_AWS_21 # versioning (bucket state có versioning)
+  - CKV_AWS_18 # S3 access logging
+  - CKV2_AWS_62 # S3 event notifications (sự kiện đi qua EventBridge do service phát)
+  # Không dùng WAF (tối thiểu ~$5/tháng + phí rule); ALB chỉ nhận traffic từ CloudFront,
+  # endpoint ghi có rate limit trong service
+  - CKV_AWS_68
+  - CKV2_AWS_47
+  # Module registry ghim theo version (~> major) trong versions.tf và .terraform.lock.hcl,
+  # không theo commit hash
+  - CKV_TF_1
+  # ---- Kubernetes
+  # EKS Auto Mode chưa bật network policy controller trên cụm này, nên NetworkPolicy sẽ không có hiệu lực
+  - CKV2_K8S_6
+  # Không đặt CPU limit để tránh CFS throttling; cluster autoscale theo requests
+  - CKV_K8S_11
+  # Tag image là commit SHA và ECR đặt tag immutable, nên IfNotPresent không kéo nhầm image cũ
+  - CKV_K8S_15
+  - CKV_K8S_43 # image digest: cùng lý do
+  # Image chạy bằng user "node" (UID 1000) có sẵn của node:22, không phải root, root FS read-only
+  - CKV_K8S_40

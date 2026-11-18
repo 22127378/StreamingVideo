@@ -90,6 +90,8 @@ resource "aws_rds_cluster_parameter_group" "this" {
 }
 
 resource "aws_rds_cluster" "this" {
+  #checkov:skip=CKV2_AWS_8:Aurora automated backups (7 days, point-in-time restore) cover this dev environment; no AWS Backup plan
+  #checkov:skip=CKV2_AWS_27:Statement logging would write user emails and video titles to CloudWatch; only server logs are exported
   cluster_identifier = local.name_prefix
   engine             = "aurora-postgresql"
   engine_mode        = "provisioned"
@@ -124,6 +126,7 @@ resource "aws_rds_cluster" "this" {
 }
 
 resource "aws_rds_cluster_instance" "writer" {
+  #checkov:skip=CKV_AWS_118:Enhanced monitoring needs an extra IAM role and costs per instance; Performance Insights and CloudWatch metrics are enough here
   identifier           = "${local.name_prefix}-writer"
   cluster_identifier   = aws_rds_cluster.this.id
   instance_class       = "db.serverless"

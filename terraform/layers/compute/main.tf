@@ -107,13 +107,16 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
 }
 
 resource "aws_security_group" "alb" {
+  #checkov:skip=CKV2_AWS_5:Attached by the EKS Auto Mode load balancer controller through the Ingress annotation, outside Terraform
   name        = "${local.name_prefix}-alb"
   description = "API load balancer: HTTP from CloudFront origin-facing IPs only"
   vpc_id      = data.aws_vpc.this.id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
+  #checkov:skip=CKV_AWS_260:Source is the CloudFront origin-facing prefix list, not 0.0.0.0/0
   security_group_id = aws_security_group.alb.id
+  description       = "HTTP from CloudFront origin-facing IPs"
   prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront.id
   ip_protocol       = "tcp"
   from_port         = 80
@@ -122,6 +125,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
 
 resource "aws_vpc_security_group_egress_rule" "alb_all" {
   security_group_id = aws_security_group.alb.id
+  description       = "ALB to pod targets in the VPC and health checks"
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

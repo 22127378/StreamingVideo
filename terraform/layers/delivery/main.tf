@@ -116,6 +116,11 @@ resource "aws_cloudfront_key_group" "playback" {
 }
 
 resource "aws_cloudfront_distribution" "this" {
+  #checkov:skip=CKV_AWS_86:Access logs go to CloudWatch Logs through vended log delivery v2 (layer observability), not the legacy logging_config block
+  #checkov:skip=CKV_AWS_174:No custom domain; the default *.cloudfront.net certificate cannot set a minimum TLS version
+  #checkov:skip=CKV2_AWS_42:No custom domain, so no ACM certificate
+  #checkov:skip=CKV_AWS_310:Single region by design; S3 and ALB origins have no secondary to fail over to
+  #checkov:skip=CKV_AWS_374:The service has no country restrictions
   enabled         = true
   comment         = "${local.name_prefix}: HLS playback and API"
   price_class     = var.price_class
