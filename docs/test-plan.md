@@ -76,7 +76,8 @@ Chạy trong lúc `pipeline-burst.sh` đang transcode.
 | R1 | Worker bị tắt giữa chừng | `kubectl -n streamforge delete pod -l app=streamforge-worker` khi đang transcode | Worker trả message về queue trong ≤ 25 giây, KEDA tạo Job mới nhận lại, video vẫn `READY`. Không có video `FAILED` |
 | R2 | Mất node Spot | `kubectl delete node <node transcode>` (giống Spot bị thu hồi) | Như R1, Karpenter cấp node mới |
 | R3 | Mất một pod API | `kubectl -n streamforge delete pod <một pod api>` | Không có request lỗi, vì PDB giữ ít nhất 1 pod và ALB bỏ target hỏng |
-| R4 | Job tự kết thúc | Chờ khoảng 6 phút sau khi queue rỗng | Các Job thêm vào lúc đông đã thoát (chờ quá 5 phút không có message), chỉ còn `WORKER_MIN_REPLICAS` Job chờ sẵn. Với `WORKER_MIN_REPLICAS=0`: không còn Job nào, node `transcode` bị thu hồi |
+| R4 | Scale to zero | Chờ khoảng 3 phút sau khi queue rỗng | Không còn Job worker nào (`kubectl -n streamforge get jobs -l app=streamforge-worker`). Trong khung giờ placeholder: còn đúng `PLACEHOLDER_REPLICAS` pod `streamforge-transcode-placeholder` Running và node `transcode` của chúng. Ngoài khung giờ: 0 pod, node `transcode` bị thu hồi |
+| R5 | Placeholder giảm cold start | Trong khung giờ, upload 1 video khi không có Job nào | Pod placeholder bị đuổi (`kubectl get events` có `Preempted`), pod Job chuyển Running trong vài giây, không chờ node mới. Placeholder quay lại Pending rồi Running trên node mới |
 
 ## 4. Stress test
 
