@@ -37,4 +37,29 @@ awslocal sqs create-queue \
 
 echo "Main SQS Queue created: ${QUEUE_NAME}"
 
+# 3. EventBridge: bus sự kiện giữa các service, hàng đợi của catalog, rule chuyển sự kiện
+echo "3. Creating EventBridge bus and rules..."
+BUS_NAME="streamforge-local"
+awslocal events create-event-bus --name ${BUS_NAME} --region ${AWS_REGION} >/dev/null 2>&1 || true
+
+CATALOG_DLQ_URL=$(awslocal sqs create-queue --queue-name streamforge-catalog-events-dlq --region ${AWS_REGION} --query 'QueueUrl' --output text)
+CATALOG_DLQ_ARN=$(awslocal sqs get-queue-attributes --queue-url ${CATALOG_DLQ_URL} --attribute-names QueueArn --query 'Attributes.QueueArn' --output text)
+CATALOG_ATTRIBUTES=$(printf '{"RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"10\\"}","VisibilityTimeout":"60"}' "${CATALOG_DLQ_ARN}")
+CATALOG_URL=$(awslocal sqs create-queue --queue-name streamforge-catalog-events --attributes "${CATALOG_ATTRIBUTES}" --region ${AWS_REGION} --query 'QueueUrl' --output text)
+CATALOG_ARN=$(awslocal sqs get-queue-attributes --queue-url ${CATALOG_URL} --attribute-names QueueArn --query 'Attributes.QueueArn' --output text)
+TRANSCODE_URL=$(awslocal sqs get-queue-url --queue-name ${QUEUE_NAME} --region ${AWS_REGION} --query 'QueueUrl' --output text)
+TRANSCODE_ARN=$(awslocal sqs get-queue-attributes --queue-url ${TRANSCODE_URL} --attribute-names QueueArn --query 'Attributes.QueueArn' --output text)
+
+# VideoUploaded -> hàng đợi transcode, chỉ phần detail (đó chính là job của worker)
+awslocal events put-rule --name to-transcode --event-bus-name ${BUS_NAME} --region ${AWS_REGION} \
+  --event-pattern '{"source":["streamforge.upload"],"detail-type":["VideoUploaded"]}' >/dev/null
+awslocal events put-targets --rule to-transcode --event-bus-name ${BUS_NAME} --region ${AWS_REGION} \
+  --targets "Id=transcode,Arn=${TRANSCODE_ARN},InputPath=\$.detail" >/dev/null
+# Mọi sự kiện của StreamForge -> catalog
+awslocal events put-rule --name to-catalog --event-bus-name ${BUS_NAME} --region ${AWS_REGION} \
+  --event-pattern '{"source":[{"prefix":"streamforge."}]}' >/dev/null
+awslocal events put-targets --rule to-catalog --event-bus-name ${BUS_NAME} --region ${AWS_REGION} \
+  --targets "Id=catalog,Arn=${CATALOG_ARN}" >/dev/null
+echo "Event bus ${BUS_NAME}: VideoUploaded -> ${QUEUE_NAME}, all events -> streamforge-catalog-events"
+
 echo "[StreamForge] Local AWS resources are ready."
