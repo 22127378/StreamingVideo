@@ -1,0 +1,34 @@
+# MediaMTX thay Amazon IVS khi chạy local (docker compose): nhận RTMP từ OBS, phát HLS cho trình duyệt.
+#   OBS:      server rtmp://localhost:1935/live, stream key lấy ở trang Studio (<channelId>?key=<khoá>)
+#   Người xem: http://localhost:8888/live/<channelId>/index.m3u8
+# Mỗi lần OBS đẩy luồng, MediaMTX hỏi live-service (POST /internal/live/auth) xem khoá có đúng không.
+logLevel: info
+
+authMethod: http
+authHTTPAddress: http://live:4000/internal/live/auth
+# API (live-service đọc danh sách luồng đang phát) và metric không cần hỏi
+authHTTPExclude:
+  - action: api
+  - action: metrics
+
+api: yes
+apiAddress: :9997
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigin: "*"
+# Low-Latency HLS: trễ khoảng 1-3 giây, hls.js hỗ trợ
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+rtsp: no
+webrtc: no
+srt: no
+
+paths:
+  all_others:

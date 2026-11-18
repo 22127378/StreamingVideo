@@ -82,6 +82,21 @@ services:
     networks:
       - streamforge-network
 
+  migrate-live:
+    profiles: ["app"]
+    container_name: streamforge-migrate-live
+    build: &live-build
+      context: ./src
+      dockerfile: ../docker/service.Dockerfile
+      args: { SERVICE: live-service }
+    command: ["node", "src/migrate.js"]
+    environment: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - streamforge-network
+
   # Các service chạy trong container: docker compose --profile app up -d --build
   # Không có profile thì chỉ LocalStack và PostgreSQL khởi động (để chạy service bằng npm trên máy).
   account:
@@ -160,6 +175,38 @@ services:
     networks:
       - streamforge-network
 
+  # Phát trực tiếp: kênh, đăng ký, bình luận. Luồng video đi qua MediaMTX (thay Amazon IVS khi local).
+  live:
+    profiles: ["app"]
+    container_name: streamforge-live
+    build: *live-build
+    environment:
+      <<: [*app-env, *db-env]
+      DB_USER: streamforge_live
+      DB_SCHEMA: live
+      LIVE_PROVIDER: local
+      # OBS và trình duyệt chạy trên máy nên dùng localhost; API của MediaMTX gọi trong mạng compose
+      LIVE_LOCAL_INGEST_URL: rtmp://localhost:1935/live
+      LIVE_LOCAL_PLAYBACK_BASE_URL: http://localhost:8888/live
+      LIVE_LOCAL_API_URL: http://mediamtx:9997
+    depends_on:
+      migrate-live:
+        condition: service_completed_successfully
+    networks:
+      - streamforge-network
+
+  mediamtx:
+    profiles: ["app"]
+    container_name: streamforge-mediamtx
+    image: bluenviron/mediamtx:1.9.3
+    volumes:
+      - ./docker/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "127.0.0.1:1935:1935" # RTMP từ OBS
+      - "127.0.0.1:8888:8888" # HLS cho trình duyệt
+    networks:
+      - streamforge-network
+
   worker:
     profiles: ["app"]
     container_name: streamforge-worker
@@ -189,7 +236,7 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./docker/gateway.nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on: [account, upload, catalog, playback]
+    depends_on: [account, upload, catalog, playback, live]
     networks:
       - streamforge-network
 

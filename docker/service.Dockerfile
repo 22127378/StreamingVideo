@@ -1,4 +1,4 @@
-# Image của một HTTP service (account, upload, catalog, playback). Context là thư mục src/ để
+# Image của một HTTP service (account, upload, catalog, playback, live). Context là thư mục src/ để
 # copy được cả package dùng chung src/shared.
 # Build: docker build -f docker/service.Dockerfile --build-arg SERVICE=catalog-service -t streamforge-catalog src
 
