@@ -1,13 +1,14 @@
-# Prometheus scrape /metrics của API (qua Service) và worker (trực tiếp pod, cổng 9464)
+# Prometheus scrape /metrics của 4 service HTTP (qua Service có nhãn streamforge.io/tier=http)
+# và worker (trực tiếp pod, cổng 9464). Mỗi Service thành một job riêng: streamforge-<service>.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: streamforge-api
+  name: streamforge-services
   namespace: streamforge
 spec:
   selector:
     matchLabels:
-      app: streamforge-api
+      streamforge.io/tier: http
   endpoints:
     - port: http
       path: /metrics
@@ -25,7 +26,8 @@ spec:
   podMetricsEndpoints:
     - port: metrics
       path: /metrics
-      interval: 30s
+      # Pod Job chỉ nán lại METRICS_LINGER_SECONDS (15s) sau khi xong, nên scrape dày hơn
+      interval: 10s
 ---
 # KEDA operator: metric về scaler (lỗi đọc SQS, giá trị độ dài queue)
 apiVersion: monitoring.coreos.com/v1

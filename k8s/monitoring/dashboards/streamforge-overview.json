@@ -217,7 +217,7 @@
     },
     {
       "type": "stat",
-      "title": "Pod API sẵn sàng",
+      "title": "Pod sẵn sàng theo service",
       "id": 5,
       "datasource": {
         "type": "prometheus",
@@ -268,8 +268,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "kube_deployment_status_replicas_available{namespace=\"streamforge\",deployment=\"streamforge-api\"}",
-          "legendFormat": "api"
+          "expr": "sum(kube_deployment_status_replicas_available{namespace=\"streamforge\",deployment=~\"streamforge-(account|upload|catalog|playback)\"}) by (deployment)",
+          "legendFormat": "{{deployment}}"
         }
       ]
     },
@@ -640,7 +640,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (outcome) (increase(streamforge_transcode_jobs_total[5m]))",
+          "expr": "sum by (outcome) (max_over_time(streamforge_transcode_jobs_total[5m]))",
           "legendFormat": "{{outcome}}"
         }
       ]
@@ -689,7 +689,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(streamforge_transcode_duration_seconds_bucket[15m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (max_over_time(streamforge_transcode_duration_seconds_bucket[15m])))",
           "legendFormat": "p50"
         },
         {
@@ -698,7 +698,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(streamforge_transcode_duration_seconds_bucket[15m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (max_over_time(streamforge_transcode_duration_seconds_bucket[15m])))",
           "legendFormat": "p95"
         }
       ]
@@ -747,8 +747,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "kube_deployment_status_replicas_available{namespace=\"streamforge\",deployment=\"streamforge-worker\"}",
-          "legendFormat": "worker sẵn sàng"
+          "expr": "sum(kube_job_status_active{namespace=\"streamforge\",job_name=~\"streamforge-worker-.+\"}) or vector(0)",
+          "legendFormat": "Job worker đang chạy (kể cả đang chờ)"
         },
         {
           "refId": "B",

@@ -9,13 +9,27 @@ spec:
   groups:
     - name: streamforge-api
       rules:
-        - alert: StreamForgeApiDown
-          expr: sum(up{job="streamforge-api"}) < 1 or absent(up{job="streamforge-api"})
+        # Mỗi service HTTP (account, upload, catalog, playback) phải có ít nhất một pod trả lời
+        - alert: StreamForgeServiceDown
+          expr: |
+            sum by (job) (up{namespace="streamforge", job=~"streamforge-(account|upload|catalog|playback)"}) < 1
+            or label_replace(absent(up{job="streamforge-account"}), "job", "streamforge-account", "", "")
+            or label_replace(absent(up{job="streamforge-upload"}), "job", "streamforge-upload", "", "")
+            or label_replace(absent(up{job="streamforge-catalog"}), "job", "streamforge-catalog", "", "")
+            or label_replace(absent(up{job="streamforge-playback"}), "job", "streamforge-playback", "", "")
           for: 5m
           labels: { severity: critical }
           annotations:
-            summary: Không pod API nào trả lời Prometheus trong 5 phút
-            description: Kiểm tra kubectl -n streamforge get pods và log của streamforge-api trong Grafana.
+            summary: "{{ $labels.job }}: không pod nào trả lời Prometheus trong 5 phút"
+            description: "Kiểm tra kubectl -n streamforge get pods -l app={{ $labels.job }} và log của service đó trong Grafana."
+
+        # Catalog không xử lý được sự kiện (lỗi lặp lại hoặc sự kiện của video không tồn tại)
+        - alert: StreamForgeCatalogEventErrors
+          expr: sum(increase(streamforge_catalog_events_total{outcome="error"}[15m])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "Catalog gặp {{ $value | humanize }} lỗi khi xử lý sự kiện trong 15 phút"
+            description: 'Sự kiện lỗi quá 10 lần sẽ vào DLQ streamforge-dev-catalog-events-dlq. Log: {namespace="streamforge", service="catalog"} |= "[events]"'
 
         - alert: StreamForgeApiHigh5xxRate
           expr: |
@@ -38,14 +52,17 @@ spec:
     - name: streamforge-transcode
       rules:
         - alert: StreamForgeTranscodeFailed
-          expr: sum(increase(streamforge_transcode_jobs_total{outcome=~"failed|rejected"}[15m])) > 0
+          # Mỗi pod (Job) xử lý 1 video nên counter chỉ đi từ 0 lên 1 và pod biến mất ngay sau đó:
+          # increase() không thấy được. max_over_time đếm số pod có kết quả này trong 15 phút.
+          expr: sum(max_over_time(streamforge_transcode_jobs_total{outcome=~"failed|rejected"}[15m])) > 0
           labels: { severity: warning }
           annotations:
             summary: "{{ $value | humanize }} video transcode thất bại hoặc bị từ chối trong 15 phút"
             description: 'Trong Grafana Explore (Loki): {namespace="streamforge", event="transcode_finished"} | json'
 
         - alert: StreamForgeWorkerUnavailable
-          expr: kube_deployment_status_replicas_available{namespace="streamforge", deployment="streamforge-worker"} < 1
+          # Job worker (ScaledJob) đang chạy, kể cả Job đang chờ message
+          expr: (sum(kube_job_status_active{namespace="streamforge", job_name=~"streamforge-worker-.+"}) or vector(0)) < 1
           for: 15m
           labels: { severity: warning }
           annotations:
