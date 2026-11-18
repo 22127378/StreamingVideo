@@ -27,11 +27,13 @@ jobs:
           - service: catalog-service
             db: { user: streamforge_catalog, schema: catalog }
           - service: playback-service
+          - service: live-service
+            db: { user: streamforge_live, schema: live }
           - service: transcode-worker
     defaults:
       run:
         working-directory: src/${{ matrix.service }}
-    # PostgreSQL cho test tích hợp của upload và catalog (mỗi service chạy migration của schema mình)
+    # PostgreSQL cho test tích hợp của upload, catalog và live (mỗi service chạy migration của schema mình)
     services:
       postgres:
         image: postgres:17-alpine
@@ -139,7 +141,7 @@ jobs:
           {
             echo "resources: [../k8s/app/base, ../k8s/db]"
             echo "images:"
-            for img in account upload catalog playback worker; do
+            for img in account upload catalog playback live worker; do
               echo "  - { name: streamforge-$img, newTag: \"$GITHUB_SHA\" }"
             done
           } > ci-overlay/kustomization.yaml
@@ -165,6 +167,7 @@ jobs:
           - { service: upload, dockerfile: docker/service.Dockerfile, build-args: SERVICE=upload-service }
           - { service: catalog, dockerfile: docker/service.Dockerfile, build-args: SERVICE=catalog-service }
           - { service: playback, dockerfile: docker/service.Dockerfile, build-args: SERVICE=playback-service }
+          - { service: live, dockerfile: docker/service.Dockerfile, build-args: SERVICE=live-service }
           - { service: worker, dockerfile: docker/worker.Dockerfile, build-args: "" }
     steps:
       - uses: actions/checkout@v4
