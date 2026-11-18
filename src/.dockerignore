@@ -1,0 +1,8 @@
+# Context build của image service/worker là src/: chỉ cần shared và service đang build
+**/node_modules
+**/tests
+**/*.log
+**/.env
+**/README.md
+frontend
+api
