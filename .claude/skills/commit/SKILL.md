@@ -43,7 +43,7 @@ Ví dụ bị từ chối: `Fixed bug`, `[FIX] Update code`, `[fix] lowercase na
    - không còn `console.log` dùng để debug tạm, `debugger;` hay đoạn code bị comment bỏ đi;
    - thụt lề và khoảng trắng nhất quán với file xung quanh;
    - không có file `.env`, `node_modules/`, `temp/`.
-4. Chạy test của package bị ảnh hưởng (`npm test` trong `src/api` hoặc `src/transcode-worker`). Nếu test fail vì lý do không liên quan (ví dụ thiếu AWS credentials), ghi rõ điều đó khi báo lại cho người dùng.
+4. Chạy test của package bị ảnh hưởng (`npm test` trong thư mục service bị ảnh hưởng: `src/shared`, `src/*-service` hoặc `src/transcode-worker`). Nếu test fail vì lý do không liên quan (ví dụ thiếu AWS credentials), ghi rõ điều đó khi báo lại cho người dùng.
 5. Stage đúng các file của commit đó bằng `git add <path>`, không dùng `git add -A`.
 6. Commit bằng heredoc để giữ nguyên định dạng:
    ```bash
