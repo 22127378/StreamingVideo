@@ -33,8 +33,8 @@ log() { printf '\n==> %s\n' "$*"; }
 log "Reading Terraform outputs"
 CLUSTER=$(tf_out compute cluster_name)
 ECR_JSON=$(terraform -chdir="$TF/compute" output -json ecr_repository_urls)
-# Mỗi service một image: 4 service HTTP và transcode worker
-SERVICES=(account upload catalog playback)
+# Mỗi service một image: 5 service HTTP và transcode worker
+SERVICES=(account upload catalog playback live)
 repo_of() { jq -r --arg k "$1" '.[$k]' <<<"$ECR_JSON"; }
 WORKER_REPO=$(repo_of worker)
 ALB_SG=$(tf_out compute alb_security_group_id)
@@ -146,6 +146,7 @@ COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
 COGNITO_DOMAIN=$COGNITO_DOMAIN
 EVENT_BUS_NAME=$EVENT_BUS_NAME
 CATALOG_EVENTS_QUEUE_URL=$CATALOG_EVENTS_QUEUE_URL
+LIVE_NAME_PREFIX=${CLUSTER}
 LOG_FORMAT=json
 EOF
 # SEED_DEMO_STATS=true ./k8s/deploy.sh: thêm lượt xem và đánh giá mẫu cho video READY chưa có số liệu
@@ -248,7 +249,7 @@ if kubectl -n argocd get application streamforge >/dev/null 2>&1 && [[ -z ${DIRE
 fi
 
 log "Applying $GITOPS directly (no ArgoCD yet)"
-MIGRATE_JOBS=(streamforge-migrate-catalog streamforge-migrate-upload)
+MIGRATE_JOBS=(streamforge-migrate-catalog streamforge-migrate-upload streamforge-migrate-live)
 # Job không sửa được sau khi tạo: xoá bản cũ rồi apply lại (migration chạy lại an toàn)
 kubectl -n streamforge delete job "${MIGRATE_JOBS[@]}" streamforge-db-migrate --ignore-not-found >/dev/null
 kubectl apply -k "$GITOPS"

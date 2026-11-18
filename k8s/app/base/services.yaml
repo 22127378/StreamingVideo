@@ -1,4 +1,4 @@
-# Bốn service HTTP của StreamForge. Mỗi service có ServiceAccount (IAM role riêng qua Pod Identity),
+# Các service HTTP của StreamForge (account, upload, catalog, playback, live). Mỗi service có ServiceAccount (IAM role riêng qua Pod Identity),
 # Deployment, Service và PodDisruptionBudget. ALB Ingress (ingress.yaml) chia /api/* theo đường dẫn.
 # Service không gọi database của nhau; dữ liệu đi qua sự kiện EventBridge (xem src/shared/src/events.js).
 ---
@@ -463,6 +463,125 @@ metadata:
 spec:
   selector:
     app: streamforge-playback
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# live: Kênh phát trực tiếp (Amazon IVS), đăng ký kênh, bình luận trực tiếp
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-live
+  namespace: streamforge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-live
+  namespace: streamforge
+  labels:
+    app: streamforge-live
+    streamforge.io/tier: http
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-live
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-live
+        streamforge.io/tier: http
+    spec:
+      serviceAccountName: streamforge-live
+      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: live
+          image: streamforge-live
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: live
+            # CloudFront + ALB đứng trước service
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+            # User DB riêng, chỉ có quyền trên schema live (token IAM)
+            - name: DB_USER
+              value: streamforge_live
+            - name: DB_SCHEMA
+              value: live
+            # Luồng video đi qua Amazon IVS (OBS đẩy RTMPS vào IVS, người xem tải HLS từ IVS)
+            - name: LIVE_PROVIDER
+              value: ivs
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-live
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-live
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-live
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-live
+  namespace: streamforge
+  labels:
+    app: streamforge-live
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn mọi Service có nhãn này
+    streamforge.io/tier: http
+spec:
+  selector:
+    app: streamforge-live
   ports:
     - name: http
       port: 80

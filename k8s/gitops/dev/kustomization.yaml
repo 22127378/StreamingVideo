@@ -20,6 +20,9 @@ images:
   - name: streamforge-playback
     newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-playback
     newTag: 0131c4f-dirty-1794984221
+  - name: streamforge-live
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-live
+    newTag: 0131c4f-dirty-1794984221
   - name: streamforge-worker
     newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-worker
     newTag: 0131c4f-dirty-1794984221

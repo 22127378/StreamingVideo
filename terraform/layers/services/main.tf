@@ -3,8 +3,8 @@
 # - EventBridge bus <prefix>-events. Service phát sự kiện (source "streamforge.<service>"), rule chuyển:
 #     VideoUploaded           -> hàng đợi transcode (chỉ phần detail, chính là job của worker)
 #     mọi sự kiện StreamForge -> hàng đợi <prefix>-catalog-events (catalog dựng dữ liệu từ đó)
-# - Mỗi service HTTP (account, upload, catalog, playback) một IAM role gắn vào ServiceAccount qua EKS Pod
-#   Identity, chỉ có đúng quyền của service đó. Upload và catalog có user Aurora riêng (IAM auth), mỗi
+# - Mỗi service HTTP (account, upload, catalog, playback, live) một IAM role gắn vào ServiceAccount qua EKS Pod
+#   Identity, chỉ có đúng quyền của service đó. Upload, catalog và live có user Aurora riêng (IAM auth), mỗi
 #   user chỉ thấy schema của mình. Worker không còn quyền database, chỉ được phát sự kiện.
 # Áp dụng sau compute, auth, database (đọc cụm, user pool, cluster Aurora theo tên).
 
@@ -12,7 +12,7 @@ locals {
   layer        = "services"
   cluster_name = local.name_prefix
   namespace    = "streamforge"
-  services     = toset(["account", "upload", "catalog", "playback"])
+  services     = toset(["account", "upload", "catalog", "playback", "live"])
 }
 
 data "aws_s3_bucket" "raw" {
@@ -209,12 +209,51 @@ data "aws_iam_policy_document" "catalog" {
   }
 }
 
+# Live: quản lý kênh Amazon IVS (mỗi kênh StreamForge một kênh IVS), đọc trạng thái đang phát,
+# và tra email (tên hiển thị trong bình luận) từ Cognito
+data "aws_iam_policy_document" "live" {
+  #checkov:skip=CKV_AWS_356:ivs:ListStreams has no resource-level permissions; every other IVS action is scoped to this account's channels and stream keys
+  statement {
+    sid = "ManageIvsChannels"
+    actions = [
+      "ivs:CreateChannel",
+      "ivs:DeleteChannel",
+      "ivs:GetChannel",
+      "ivs:CreateStreamKey",
+      "ivs:DeleteStreamKey",
+      "ivs:GetStreamKey",
+      "ivs:TagResource",
+    ]
+    resources = [
+      "arn:aws:ivs:${var.aws_region}:${local.account_id}:channel/*",
+      "arn:aws:ivs:${var.aws_region}:${local.account_id}:stream-key/*",
+    ]
+  }
+  # ListStreams không giới hạn được theo resource
+  statement {
+    sid       = "ListLiveStreams"
+    actions   = ["ivs:ListStreams"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "ResolveDisplayNames"
+    actions   = ["cognito-idp:AdminGetUser"]
+    resources = data.aws_cognito_user_pools.this.arns
+  }
+  statement {
+    sid       = "ConnectAsLiveUser"
+    actions   = ["rds-db:connect"]
+    resources = ["${local.db_user_arn}/streamforge_live"]
+  }
+}
+
 locals {
   service_policies = {
     account  = data.aws_iam_policy_document.account.json
     upload   = data.aws_iam_policy_document.upload.json
     catalog  = data.aws_iam_policy_document.catalog.json
     playback = data.aws_iam_policy_document.publish_events.json
+    live     = data.aws_iam_policy_document.live.json
   }
 }
 

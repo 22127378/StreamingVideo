@@ -1,5 +1,5 @@
-# Một ALB cho cả 4 service, chia theo đường dẫn. ALB public nhưng security group chỉ mở cho CloudFront
-# (k8s/gitops/dev thêm annotation security-groups). /internal/* của catalog không có rule nên không ra ngoài.
+# Một ALB cho cả 5 service, chia theo đường dẫn. ALB public nhưng security group chỉ mở cho CloudFront
+# (k8s/gitops/dev thêm annotation security-groups). /internal/* (catalog, live) không có rule nên không ra ngoài.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -31,3 +31,7 @@ spec:
             pathType: Prefix
             backend:
               service: { name: streamforge-playback, port: { name: http } }
+          - path: /api/live
+            pathType: Prefix
+            backend:
+              service: { name: streamforge-live, port: { name: http } }

@@ -71,9 +71,9 @@ module "eks" {
 }
 
 # ---------------- Container registry
-# Một repository cho mỗi image: 4 service HTTP và worker
+# Một repository cho mỗi image: 5 service HTTP và worker
 resource "aws_ecr_repository" "app" {
-  for_each = toset(["worker", "account", "upload", "catalog", "playback"])
+  for_each = toset(["worker", "account", "upload", "catalog", "playback", "live"])
 
   name                 = "${local.name_prefix}-${each.key}"
   image_tag_mutability = "IMMUTABLE"
