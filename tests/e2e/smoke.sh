@@ -69,14 +69,14 @@ expect "/auth/me premium" premium "$(curl -s -H "$(auth "$PREMIUM")" "$API/auth/
 
 # ---------- Upload (video Premium do người dùng free upload)
 expect "GET /api/videos is public" 200 "$(code "$API/videos")"
-expect "upload-url without login" 401 "$(code -H 'Content-Type: application/json' -X POST "$API/videos/upload-url" -d '{}')"
-expect "upload-url without fileSize" 400 \
-  "$(code -H "$(auth "$FREE")" -H 'Content-Type: application/json' -X POST "$API/videos/upload-url" -d '{"fileName":"a.mp4","contentType":"video/mp4"}')"
-R=$(curl -s -H "$(auth "$FREE")" -H 'Content-Type: application/json' -X POST "$API/videos/upload-url" \
+expect "POST /api/uploads without login" 401 "$(code -H 'Content-Type: application/json' -X POST "$API/uploads" -d '{}')"
+expect "POST /api/uploads without fileSize" 400 \
+  "$(code -H "$(auth "$FREE")" -H 'Content-Type: application/json' -X POST "$API/uploads" -d '{"fileName":"a.mp4","contentType":"video/mp4"}')"
+R=$(curl -s -H "$(auth "$FREE")" -H 'Content-Type: application/json' -X POST "$API/uploads" \
   -d "{\"fileName\":\"smoke.mp4\",\"contentType\":\"video/mp4\",\"fileSize\":$SIZE,\"title\":\"smoke test\",\"tier\":\"premium\"}")
 ID=$(jq -r .data.videoId <<<"$R"); URL=$(jq -r .data.uploadUrl <<<"$R")
-expect "upload-url returns a videoId" true "$([[ $ID =~ ^[0-9a-f-]{36}$ ]] && echo true || echo false)"
-complete() { code -H "$(auth "$1")" -H 'Content-Type: application/json' -X POST "$API/videos/complete" -d "{\"videoId\":\"$ID\"}"; }
+expect "upload returns a videoId" true "$([[ $ID =~ ^[0-9a-f-]{36}$ ]] && echo true || echo false)"
+complete() { code -H "$(auth "$1")" -X POST "$API/uploads/$ID/complete"; }
 expect "complete before upload" 400 "$(complete "$FREE")"
 head -c $((SIZE + 1000)) /dev/urandom > "$WORK/bigger.bin"
 expect "PUT larger than declared size is rejected by S3" 403 "$(code -X PUT -H 'Content-Type: video/mp4' --data-binary @"$WORK/bigger.bin" "$URL")"
@@ -99,19 +99,26 @@ MASTER=$(curl -s "$API/videos/$ID" | jq -r .data.streamingUrl)
 THUMB=$(curl -s "$API/videos/$ID" | jq -r .data.thumbnailUrl)
 expect "thumbnail is public" 200 "$(code "$THUMB")"
 expect "HLS without signed cookies" 403 "$(code "$MASTER")"
-expect "playback without login" 401 "$(code -X POST "$API/videos/$ID/playback")"
-expect "free user denied premium video" 403 "$(code -H "$(auth "$OTHER")" -X POST "$API/videos/$ID/playback")"
+expect "playback without login" 401 "$(code -X POST "$API/playback/$ID")"
+expect "free user denied premium video" 403 "$(code -H "$(auth "$OTHER")" -X POST "$API/playback/$ID")"
 expect "my videos needs login" 401 "$(code "$API/videos/mine")"
 expect "my videos lists the upload" true \
   "$(curl -s -H "$(auth "$FREE")" "$API/videos/mine" | jq --arg id "$ID" '[.data[].videoId] | index($id) != null')"
 
 # Chủ video ở gói Free: xem được video Premium của mình, nhưng chỉ tới 720p
 OWNER_JAR="$WORK/owner-cookies.txt"
-P=$(curl -s -c "$OWNER_JAR" -H "$(auth "$FREE")" -X POST "$API/videos/$ID/playback")
+P=$(curl -s -c "$OWNER_JAR" -H "$(auth "$FREE")" -X POST "$API/playback/$ID")
 expect "free owner watches own premium video" true "$(jq -r '.success' <<<"$P")"
 expect "free owner gets the 720p master" "${MASTER%/*}/sd/master.m3u8" "$(jq -r .data.streamingUrl <<<"$P")"
 expect "free owner sees 1080p as locked" '["1080p"]' "$(jq -c .data.lockedQualities <<<"$P")"
-expect "views counted" 1 "$(jq -r .data.viewCount <<<"$P")"
+# Lượt xem đi qua sự kiện VideoViewed (playback -> EventBridge -> catalog), chờ vài giây
+views=0
+for _ in $(seq 1 15); do
+  views=$(curl -s "$API/videos/$ID" | jq -r .data.viewCount)
+  [[ $views -ge 1 ]] && break
+  sleep 2
+done
+expect "view counted by catalog from the VideoViewed event" 1 "$views"
 expect "free master has no 1080p" false "$(curl -s -b "$OWNER_JAR" "${MASTER%/*}/sd/master.m3u8" | grep -q 1080p && echo true || echo false)"
 SD_VARIANT=$(curl -s -b "$OWNER_JAR" "${MASTER%/*}/sd/master.m3u8" | grep -m1 '\.m3u8$')
 SD_SEGMENT=$(curl -s -b "$OWNER_JAR" "${MASTER%/*}/sd/$SD_VARIANT" | grep -m1 '\.ts$')
@@ -121,7 +128,7 @@ expect "free cookies: 1080p segment blocked by CloudFront" 403 "$(code -b "$OWNE
 expect "free cookies: full master blocked" 403 "$(code -b "$OWNER_JAR" "$MASTER")"
 
 JAR="$WORK/cookies.txt"
-expect "premium user gets playback" 200 "$(code -c "$JAR" -H "$(auth "$PREMIUM")" -X POST "$API/videos/$ID/playback")"
+expect "premium user gets playback" 200 "$(code -c "$JAR" -H "$(auth "$PREMIUM")" -X POST "$API/playback/$ID")"
 expect "3 CloudFront cookies set" 3 "$(grep -c 'CloudFront-' "$JAR")"
 expect "cookies scoped to this video" true "$(grep 'CloudFront-Policy' "$JAR" | grep -q "/videos/$ID/" && echo true || echo false)"
 expect "master.m3u8 with cookies" 200 "$(code -b "$JAR" "$MASTER")"
@@ -148,7 +155,7 @@ expect "list filtered by tier and sorted by rating" true \
 expect "upgrade free user" premium "$(curl -s -H "$(auth "$FREE")" -X POST "$API/auth/upgrade" | jq -r .data.tier)"
 FREE=$(login "$FREE_USER")
 expect "upgraded user gets the full master" "$MASTER" \
-  "$(curl -s -H "$(auth "$FREE")" -X POST "$API/videos/$ID/playback" | jq -r .data.streamingUrl)"
+  "$(curl -s -H "$(auth "$FREE")" -X POST "$API/playback/$ID" | jq -r .data.streamingUrl)"
 
 # ---------- Xoá
 if [[ ${KEEP:-0} != 1 ]]; then

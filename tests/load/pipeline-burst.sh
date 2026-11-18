@@ -34,7 +34,8 @@ cluster_state() {
   local out=""
   if has kubectl; then
     local w s
-    w=$(kubectl -n streamforge get deploy streamforge-worker -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+    # Worker là KEDA ScaledJob: đếm pod worker đang chạy
+    w=$(kubectl -n streamforge get pods -l app=streamforge-worker --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
     s=$(kubectl get nodes -l streamforge.io/pool=transcode --no-headers 2>/dev/null | wc -l)
     out="workers=${w:-0} spot_nodes=$s"
   fi
