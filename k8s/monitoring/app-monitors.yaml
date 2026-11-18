@@ -1,4 +1,4 @@
-# Prometheus scrape /metrics của 4 service HTTP (qua Service có nhãn streamforge.io/tier=http)
+# Prometheus scrape /metrics của 5 service HTTP (qua Service có nhãn streamforge.io/tier=http)
 # và worker (trực tiếp pod, cổng 9464). Mỗi Service thành một job riêng: streamforge-<service>.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -9,6 +9,10 @@ spec:
   selector:
     matchLabels:
       streamforge.io/tier: http
+  # Hash của bản pod (Argo Rollouts) thành nhãn rollouts_pod_template_hash, để phân tích canary
+  # (k8s/app/base/analysis.yaml) chỉ đo pod của bản mới
+  podTargetLabels:
+    - rollouts-pod-template-hash
   endpoints:
     - port: http
       path: /metrics

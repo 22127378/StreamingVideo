@@ -21,6 +21,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TF="$ROOT/terraform/layers"
 REGION=${AWS_REGION:-us-east-1}
 KEDA_VERSION=2.20.2
+# Chart argo-rollouts; khi đã có ArgoCD thì Application "argo-rollouts" của repo cấu hình quản lý
+ROLLOUTS_CHART_VERSION=2.37.7
 # Worker scale về 0. Pod giữ chỗ (k8s/app/base/transcode-placeholder.yaml) giữ sẵn node Spot và image
 # trong khung giờ cron dưới đây (giờ Việt Nam) để video đầu tiên không chịu cold start.
 # Mỗi replica giữ 1 node, khoảng $0.03/giờ Spot; PLACEHOLDER_REPLICAS=0 để tắt hẳn.
@@ -125,6 +127,18 @@ else
     --set podIdentity.aws.irsa.enabled=false \
     --set prometheus.operator.enabled=true
 fi
+fi
+
+log "Argo Rollouts $ROLLOUTS_CHART_VERSION"
+# Service HTTP là Rollout (canary): cần controller và CRD trước khi apply app
+if kubectl -n argocd get application argo-rollouts >/dev/null 2>&1; then
+  echo "Argo Rollouts is managed by ArgoCD, skipping"
+elif [[ $(helm -n argo-rollouts list --filter '^argo-rollouts$' --deployed -o json 2>/dev/null | jq -r '.[0].chart // empty') == "argo-rollouts-$ROLLOUTS_CHART_VERSION" ]]; then
+  echo "argo-rollouts-$ROLLOUTS_CHART_VERSION already deployed, skipping"
+else
+  helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+  helm repo update argo >/dev/null
+  helm upgrade --install argo-rollouts argo/argo-rollouts --version "$ROLLOUTS_CHART_VERSION"     --namespace argo-rollouts --create-namespace --wait --timeout 10m     --set dashboard.enabled=false --set controller.metrics.enabled=true
 fi
 
 log "Namespace and secrets"
@@ -290,8 +304,19 @@ done
 kubectl -n streamforge delete deployment streamforge-api streamforge-worker --ignore-not-found
 kubectl -n streamforge delete service,poddisruptionbudget,serviceaccount streamforge-api --ignore-not-found
 kubectl -n streamforge delete scaledobject streamforge-worker --ignore-not-found
+# Service HTTP chuyển từ Deployment sang Rollout: chờ Rollout khoẻ rồi mới gỡ Deployment cũ (cùng tên)
 for svc in "${SERVICES[@]}"; do
-  kubectl -n streamforge rollout status "deploy/streamforge-$svc" --timeout=10m
+  phase=""
+  for _ in $(seq 1 120); do
+    phase=$(kubectl -n streamforge get rollout "streamforge-$svc" -o jsonpath='{.status.phase}')
+    [[ $phase == Healthy || $phase == Degraded ]] && break
+    sleep 5
+  done
+  if [[ $phase != Healthy ]]; then
+    echo "Rollout streamforge-$svc is ${phase:-not ready}" >&2
+    exit 1
+  fi
+  kubectl -n streamforge delete deployment "streamforge-$svc" --ignore-not-found
 done
 
 log "Waiting for the API load balancer"

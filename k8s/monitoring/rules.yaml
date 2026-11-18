@@ -9,14 +9,15 @@ spec:
   groups:
     - name: streamforge-api
       rules:
-        # Mỗi service HTTP (account, upload, catalog, playback) phải có ít nhất một pod trả lời
+        # Mỗi service HTTP (account, upload, catalog, playback, live) phải có ít nhất một pod trả lời
         - alert: StreamForgeServiceDown
           expr: |
-            sum by (job) (up{namespace="streamforge", job=~"streamforge-(account|upload|catalog|playback)"}) < 1
+            sum by (job) (up{namespace="streamforge", job=~"streamforge-(account|upload|catalog|playback|live)"}) < 1
             or label_replace(absent(up{job="streamforge-account"}), "job", "streamforge-account", "", "")
             or label_replace(absent(up{job="streamforge-upload"}), "job", "streamforge-upload", "", "")
             or label_replace(absent(up{job="streamforge-catalog"}), "job", "streamforge-catalog", "", "")
             or label_replace(absent(up{job="streamforge-playback"}), "job", "streamforge-playback", "", "")
+            or label_replace(absent(up{job="streamforge-live"}), "job", "streamforge-live", "", "")
           for: 5m
           labels: { severity: critical }
           annotations:

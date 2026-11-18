@@ -1,0 +1,40 @@
+# Phân tích canary dùng chung cho mọi service HTTP (Rollout ở services.yaml truyền tham số).
+# Chỉ đo pod của bản canary: ServiceMonitor (k8s/monitoring/app-monitors.yaml) gắn nhãn
+# rollouts_pod_template_hash vào metric, Rollout truyền hash của bản mới vào canary-hash.
+# Không có traffic (không có mẫu) thì coi là đạt, để môi trường dev ít người dùng vẫn deploy được.
+# Một lần đo không đạt là đủ để huỷ: Argo Rollouts đưa traffic về bản stable và scale canary về 0.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate
+metadata:
+  name: streamforge-http-health
+spec:
+  args:
+    - name: job # tên Service, cũng là nhãn job trong Prometheus
+    - name: canary-hash
+    - name: prometheus-address
+      value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+  metrics:
+    - name: error-rate
+      interval: 1m
+      # Chờ đủ mẫu cho cửa sổ rate 2 phút (scrape mỗi 30s)
+      initialDelay: 1m
+      failureLimit: 0
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] < 0.05
+      provider:
+        prometheus:
+          address: "{{args.prometheus-address}}"
+          query: |
+            sum(rate(streamforge_http_request_duration_seconds_count{job="{{args.job}}", rollouts_pod_template_hash="{{args.canary-hash}}", status=~"5.."}[2m]))
+            /
+            sum(rate(streamforge_http_request_duration_seconds_count{job="{{args.job}}", rollouts_pod_template_hash="{{args.canary-hash}}"}[2m]))
+    - name: p95-latency-seconds
+      interval: 1m
+      initialDelay: 1m
+      failureLimit: 0
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] < 1
+      provider:
+        prometheus:
+          address: "{{args.prometheus-address}}"
+          query: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(streamforge_http_request_duration_seconds_bucket{job="{{args.job}}", rollouts_pod_template_hash="{{args.canary-hash}}", route!="unmatched"}[2m])))

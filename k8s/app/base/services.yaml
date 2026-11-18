@@ -1,5 +1,5 @@
 # Các service HTTP của StreamForge (account, upload, catalog, playback, live). Mỗi service có ServiceAccount (IAM role riêng qua Pod Identity),
-# Deployment, Service và PodDisruptionBudget. ALB Ingress (ingress.yaml) chia /api/* theo đường dẫn.
+# Rollout (Argo Rollouts, canary), Service và PodDisruptionBudget. ALB Ingress (ingress.yaml) chia /api/* theo đường dẫn.
 # Service không gọi database của nhau; dữ liệu đi qua sự kiện EventBridge (xem src/shared/src/events.js).
 ---
 # account: Đăng nhập, gói, nâng cấp Premium (Cognito)
@@ -9,8 +9,8 @@ metadata:
   name: streamforge-account
   namespace: streamforge
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: streamforge-account
   namespace: streamforge
@@ -22,10 +22,26 @@ spec:
   selector:
     matchLabels:
       app: streamforge-account
+  # Canary (Argo Rollouts): một pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus
+  # (k8s/app/base/analysis.yaml) chạy nền; lỗi 5xx hoặc độ trễ vượt ngưỡng thì tự quay về bản cũ.
   strategy:
-    rollingUpdate:
+    canary:
       maxUnavailable: 0
       maxSurge: 1
+      analysis:
+        templates:
+          - templateName: streamforge-http-health
+            clusterScope: true
+        startingStep: 1
+        args:
+          - name: job
+            value: streamforge-account
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        - setWeight: 50
+        - pause: { duration: 3m }
   template:
     metadata:
       labels:
@@ -120,8 +136,8 @@ metadata:
   name: streamforge-upload
   namespace: streamforge
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: streamforge-upload
   namespace: streamforge
@@ -133,10 +149,26 @@ spec:
   selector:
     matchLabels:
       app: streamforge-upload
+  # Canary (Argo Rollouts): một pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus
+  # (k8s/app/base/analysis.yaml) chạy nền; lỗi 5xx hoặc độ trễ vượt ngưỡng thì tự quay về bản cũ.
   strategy:
-    rollingUpdate:
+    canary:
       maxUnavailable: 0
       maxSurge: 1
+      analysis:
+        templates:
+          - templateName: streamforge-http-health
+            clusterScope: true
+        startingStep: 1
+        args:
+          - name: job
+            value: streamforge-upload
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        - setWeight: 50
+        - pause: { duration: 3m }
   template:
     metadata:
       labels:
@@ -236,8 +268,8 @@ metadata:
   name: streamforge-catalog
   namespace: streamforge
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: streamforge-catalog
   namespace: streamforge
@@ -249,10 +281,26 @@ spec:
   selector:
     matchLabels:
       app: streamforge-catalog
+  # Canary (Argo Rollouts): một pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus
+  # (k8s/app/base/analysis.yaml) chạy nền; lỗi 5xx hoặc độ trễ vượt ngưỡng thì tự quay về bản cũ.
   strategy:
-    rollingUpdate:
+    canary:
       maxUnavailable: 0
       maxSurge: 1
+      analysis:
+        templates:
+          - templateName: streamforge-http-health
+            clusterScope: true
+        startingStep: 1
+        args:
+          - name: job
+            value: streamforge-catalog
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        - setWeight: 50
+        - pause: { duration: 3m }
   template:
     metadata:
       labels:
@@ -352,8 +400,8 @@ metadata:
   name: streamforge-playback
   namespace: streamforge
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: streamforge-playback
   namespace: streamforge
@@ -367,10 +415,26 @@ spec:
   selector:
     matchLabels:
       app: streamforge-playback
+  # Canary (Argo Rollouts): một pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus
+  # (k8s/app/base/analysis.yaml) chạy nền; lỗi 5xx hoặc độ trễ vượt ngưỡng thì tự quay về bản cũ.
   strategy:
-    rollingUpdate:
+    canary:
       maxUnavailable: 0
       maxSurge: 1
+      analysis:
+        templates:
+          - templateName: streamforge-http-health
+            clusterScope: true
+        startingStep: 1
+        args:
+          - name: job
+            value: streamforge-playback
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        - setWeight: 50
+        - pause: { duration: 3m }
   template:
     metadata:
       labels:
@@ -475,8 +539,8 @@ metadata:
   name: streamforge-live
   namespace: streamforge
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: streamforge-live
   namespace: streamforge
@@ -488,10 +552,26 @@ spec:
   selector:
     matchLabels:
       app: streamforge-live
+  # Canary (Argo Rollouts): một pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus
+  # (k8s/app/base/analysis.yaml) chạy nền; lỗi 5xx hoặc độ trễ vượt ngưỡng thì tự quay về bản cũ.
   strategy:
-    rollingUpdate:
+    canary:
       maxUnavailable: 0
       maxSurge: 1
+      analysis:
+        templates:
+          - templateName: streamforge-http-health
+            clusterScope: true
+        startingStep: 1
+        args:
+          - name: job
+            value: streamforge-live
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      steps:
+        - setWeight: 50
+        - pause: { duration: 3m }
   template:
     metadata:
       labels:
