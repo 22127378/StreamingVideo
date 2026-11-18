@@ -19,11 +19,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, transcode-worker]
+        include:
+          - service: shared
+          - service: account-service
+          - service: upload-service
+            db: { user: streamforge_upload, schema: upload }
+          - service: catalog-service
+            db: { user: streamforge_catalog, schema: catalog }
+          - service: playback-service
+          - service: transcode-worker
     defaults:
       run:
         working-directory: src/${{ matrix.service }}
-    # PostgreSQL cho test tích hợp của API (tests/repository.test.js)
+    # PostgreSQL cho test tích hợp của upload và catalog (mỗi service chạy migration của schema mình)
     services:
       postgres:
         image: postgres:17-alpine
@@ -57,8 +65,9 @@ jobs:
         env:
           FFMPEG_PATH: /usr/bin/ffmpeg
           FFPROBE_PATH: /usr/bin/ffprobe
-          DB_TEST: ${{ matrix.service == 'api' && '1' || '' }}
-          DB_USER: streamforge_api
+          DB_TEST: ${{ matrix.db && '1' || '' }}
+          DB_USER: ${{ matrix.db.user }}
+          DB_SCHEMA: ${{ matrix.db.schema }}
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=optional --audit-level=high
@@ -113,12 +122,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - service: api
-            context: src/api
-            dockerfile: docker/api.Dockerfile
-          - service: worker
-            context: src/transcode-worker
-            dockerfile: docker/worker.Dockerfile
+          - { service: account, dockerfile: docker/service.Dockerfile, build-args: SERVICE=account-service }
+          - { service: upload, dockerfile: docker/service.Dockerfile, build-args: SERVICE=upload-service }
+          - { service: catalog, dockerfile: docker/service.Dockerfile, build-args: SERVICE=catalog-service }
+          - { service: playback, dockerfile: docker/service.Dockerfile, build-args: SERVICE=playback-service }
+          - { service: worker, dockerfile: docker/worker.Dockerfile, build-args: "" }
     steps:
       - uses: actions/checkout@v4
 
@@ -127,8 +135,10 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
+          # Context là src/ để image copy được package dùng chung src/shared
+          context: src
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build-args }}
           tags: streamforge-${{ matrix.service }}:${{ github.sha }}
           load: true
           cache-from: type=gha,scope=${{ matrix.service }}
