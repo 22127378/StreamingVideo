@@ -1,0 +1,62 @@
+# Helm values cho ArgoCD (chart argo-cd 10.11.7, ArgoCD v3.5.7). Cài bằng k8s/argocd/install.sh.
+# Bản tối giản cho một cụm dev: không SSO (Dex), không thông báo, không ApplicationSet.
+# UI mở bằng port-forward, không đưa ra Internet.
+
+dex:
+  enabled: false
+
+notifications:
+  enabled: false
+
+applicationSet:
+  replicas: 0
+
+configs:
+  cm:
+    # Kiểm tra Git mỗi 3 phút. Ngắn hơn thì GitHub dễ giới hạn request ẩn danh (repo public).
+    timeout.reconciliation: 180s
+    # ArgoCD không tự đánh giá health của ScaledJob; coi là khoẻ khi điều kiện Ready = True
+    resource.customizations.health.keda.sh_ScaledJob: |
+      hs = {}
+      if obj.status ~= nil and obj.status.conditions ~= nil then
+        for _, c in ipairs(obj.status.conditions) do
+          if c.type == "Ready" and c.status == "True" then
+            hs.status = "Healthy"
+            hs.message = "ScaledJob ready"
+            return hs
+          end
+          if c.type == "Ready" and c.status == "False" then
+            hs.status = "Degraded"
+            hs.message = c.message
+            return hs
+          end
+        end
+      end
+      hs.status = "Progressing"
+      hs.message = "Waiting for KEDA"
+      return hs
+
+# Tài nguyên nhỏ: cụm chỉ có một Application
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+server:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 128Mi }
+
+redis:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }

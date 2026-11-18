@@ -1,0 +1,82 @@
+# Sinh bởi k8s/deploy.sh. ArgoCD (k8s/argocd/application.yaml) đồng bộ thư mục này lên cụm.
+# Các giá trị là định danh tài nguyên AWS, không phải bí mật; secret được tạo ngoài Git.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../app/base
+  - ../../db
+configurations:
+  - kustomizeconfig.yaml
+images:
+  - name: streamforge-account
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-account
+    newTag: 0131c4f-dirty-1794984221
+  - name: streamforge-upload
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-upload
+    newTag: 0131c4f-dirty-1794984221
+  - name: streamforge-catalog
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-catalog
+    newTag: 0131c4f-dirty-1794984221
+  - name: streamforge-playback
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-playback
+    newTag: 0131c4f-dirty-1794984221
+  - name: streamforge-worker
+    newName: 728384804953.dkr.ecr.us-east-1.amazonaws.com/streamforge-dev-worker
+    newTag: 0131c4f-dirty-1794984221
+generatorOptions:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+configMapGenerator:
+  - name: streamforge-config
+    namespace: streamforge
+    envs:
+      - config.env
+  - name: streamforge-db-migrate
+    namespace: streamforge
+    envs:
+      - migrate.env
+patches:
+  - target:
+      kind: Ingress
+      name: streamforge-api
+    patch: |-
+      - op: add
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1security-groups
+        value: sg-0513836b6a8a91e2c
+  - target:
+      kind: ScaledJob
+      name: streamforge-worker
+    patch: |-
+      - op: replace
+        path: /spec/triggers/0/metadata/queueURL
+        value: https://sqs.us-east-1.amazonaws.com/728384804953/streamforge-dev-transcode
+      - op: replace
+        path: /spec/minReplicaCount
+        value: 1
+  - target:
+      kind: Namespace
+      name: streamforge
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          argocd.argoproj.io/sync-wave: "-3"
+  - target:
+      kind: ServiceAccount
+      name: streamforge-db-migrator
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          argocd.argoproj.io/sync-wave: "-2"
+  # Migration (catalog, upload) là hook Sync: chạy lại ở mỗi lần đồng bộ, xong thì ArgoCD mới rollout app
+  - target:
+      kind: Job
+      labelSelector: app=streamforge-migrate
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          argocd.argoproj.io/hook: Sync
+          argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+          argocd.argoproj.io/sync-wave: "-1"

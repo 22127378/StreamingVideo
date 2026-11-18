@@ -1,0 +1,16 @@
+# Kustomize thêm hash vào tên ConfigMap/Secret sinh ra (streamforge-config-<hash>) và tự sửa tên ở
+# Deployment, Job, ... nhưng không biết đường dẫn bên trong KEDA ScaledJob. Thiếu cấu hình này thì
+# ScaledJob trỏ tới "streamforge-config" (không có hash) và KEDA không tạo được Job nào.
+nameReference:
+  - kind: ConfigMap
+    fieldSpecs:
+      - kind: ScaledJob
+        path: spec/jobTargetRef/template/spec/containers/envFrom/configMapRef/name
+      - kind: ScaledJob
+        path: spec/jobTargetRef/template/spec/containers/env/valueFrom/configMapKeyRef/name
+  - kind: Secret
+    fieldSpecs:
+      - kind: ScaledJob
+        path: spec/jobTargetRef/template/spec/containers/envFrom/secretRef/name
+      - kind: ScaledJob
+        path: spec/jobTargetRef/template/spec/containers/env/valueFrom/secretKeyRef/name

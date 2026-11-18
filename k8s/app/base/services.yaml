@@ -1,0 +1,459 @@
+# Bốn service HTTP của StreamForge. Mỗi service có ServiceAccount (IAM role riêng qua Pod Identity),
+# Deployment, Service và PodDisruptionBudget. ALB Ingress (ingress.yaml) chia /api/* theo đường dẫn.
+# Service không gọi database của nhau; dữ liệu đi qua sự kiện EventBridge (xem src/shared/src/events.js).
+---
+# account: Đăng nhập, gói, nâng cấp Premium (Cognito)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-account
+  namespace: streamforge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-account
+  namespace: streamforge
+  labels:
+    app: streamforge-account
+    streamforge.io/tier: http
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-account
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-account
+        streamforge.io/tier: http
+    spec:
+      serviceAccountName: streamforge-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: account
+          image: streamforge-account
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: account
+            # CloudFront + ALB đứng trước service
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-account
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-account
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-account
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-account
+  namespace: streamforge
+  labels:
+    app: streamforge-account
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn mọi Service có nhãn này
+    streamforge.io/tier: http
+spec:
+  selector:
+    app: streamforge-account
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# upload: Cấp URL upload thẳng lên S3, xác nhận upload, phát VideoCreated/VideoUploaded
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-upload
+  namespace: streamforge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-upload
+  namespace: streamforge
+  labels:
+    app: streamforge-upload
+    streamforge.io/tier: http
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-upload
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-upload
+        streamforge.io/tier: http
+    spec:
+      serviceAccountName: streamforge-upload
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: upload
+          image: streamforge-upload
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: upload
+            # CloudFront + ALB đứng trước service
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+            # User DB riêng, chỉ có quyền trên schema upload (token IAM)
+            - name: DB_USER
+              value: streamforge_upload
+            - name: DB_SCHEMA
+              value: upload
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-upload
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-upload
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-upload
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-upload
+  namespace: streamforge
+  labels:
+    app: streamforge-upload
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn mọi Service có nhãn này
+    streamforge.io/tier: http
+spec:
+  selector:
+    app: streamforge-upload
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# catalog: Danh sách, chi tiết, đánh giá, xoá video; dựng dữ liệu từ sự kiện (hàng đợi catalog-events)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-catalog
+  namespace: streamforge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-catalog
+  namespace: streamforge
+  labels:
+    app: streamforge-catalog
+    streamforge.io/tier: http
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-catalog
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-catalog
+        streamforge.io/tier: http
+    spec:
+      serviceAccountName: streamforge-catalog
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: catalog
+          image: streamforge-catalog
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: catalog
+            # CloudFront + ALB đứng trước service
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+            # User DB riêng, chỉ có quyền trên schema catalog (token IAM)
+            - name: DB_USER
+              value: streamforge_catalog
+            - name: DB_SCHEMA
+              value: catalog
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-catalog
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-catalog
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-catalog
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-catalog
+  namespace: streamforge
+  labels:
+    app: streamforge-catalog
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn mọi Service có nhãn này
+    streamforge.io/tier: http
+spec:
+  selector:
+    app: streamforge-catalog
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# playback: Kiểm tra quyền xem, cấp CloudFront signed cookies, phát VideoViewed
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamforge-playback
+  namespace: streamforge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-playback
+  namespace: streamforge
+  labels:
+    app: streamforge-playback
+    streamforge.io/tier: http
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: streamforge-playback
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: streamforge-playback
+        streamforge.io/tier: http
+    spec:
+      serviceAccountName: streamforge-playback
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: playback
+          image: streamforge-playback
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+          env:
+            - name: SERVICE_NAME
+              value: playback
+            # CloudFront + ALB đứng trước service
+            - name: TRUST_PROXY_HOPS
+              value: "2"
+            # Hỏi catalog thông tin video qua API nội bộ (/internal), trong cụm
+            - name: CATALOG_URL
+              value: http://streamforge-catalog
+            # Ký CloudFront signed cookies cho /videos/*
+            - name: CLOUDFRONT_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: streamforge-cloudfront
+                  key: private_key
+                  optional: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: streamforge-playback
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: streamforge-playback
+  namespace: streamforge
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: streamforge-playback
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamforge-playback
+  namespace: streamforge
+  labels:
+    app: streamforge-playback
+    # ServiceMonitor (k8s/monitoring/app-monitors.yaml) chọn mọi Service có nhãn này
+    streamforge.io/tier: http
+spec:
+  selector:
+    app: streamforge-playback
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

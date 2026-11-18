@@ -3,13 +3,8 @@ kind: Namespace
 metadata:
   name: streamforge
 ---
-# Tên ServiceAccount phải khớp aws_eks_pod_identity_association ở terraform/layers/compute
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: streamforge-api
-  namespace: streamforge
----
+# Tên ServiceAccount phải khớp aws_eks_pod_identity_association ở terraform/layers/services.
+# ServiceAccount của 4 service HTTP nằm trong services.yaml.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

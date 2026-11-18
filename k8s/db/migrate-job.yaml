@@ -1,6 +1,6 @@
-# Migration database: schema, user DB cho API và worker, chép dữ liệu cũ từ DynamoDB.
-# k8s/deploy.sh chạy Job này (image API, lệnh node src/db/migrate.js) trước khi rollout app.
-# ServiceAccount có Pod Identity đọc mật khẩu master (Secrets Manager) và Scan bảng DynamoDB cũ.
+# Migration database: mỗi service có schema và user riêng (catalog, upload), chạy bằng image của chính service.
+# Chạy trước khi rollout app: hook Sync của ArgoCD (wave -1), hoặc k8s/deploy.sh khi chưa có ArgoCD.
+# ServiceAccount có Pod Identity đọc mật khẩu master (Secrets Manager).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,15 +10,17 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: streamforge-db-migrate
+  name: streamforge-migrate-catalog
   namespace: streamforge
+  labels:
+    app: streamforge-migrate
 spec:
   backoffLimit: 2
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
-        app: streamforge-db-migrate
+        app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
       restartPolicy: Never
@@ -29,8 +31,48 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: streamforge-api
-          command: ["node", "src/db/migrate.js"]
+          image: streamforge-catalog
+          command: ["node", "src/migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: streamforge-config
+            - configMapRef:
+                name: streamforge-db-migrate
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: streamforge-migrate-upload
+  namespace: streamforge
+  labels:
+    app: streamforge-migrate
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: streamforge-migrate
+    spec:
+      serviceAccountName: streamforge-db-migrator
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: streamforge-upload
+          command: ["node", "src/migrate.js"]
           envFrom:
             - configMapRef:
                 name: streamforge-config

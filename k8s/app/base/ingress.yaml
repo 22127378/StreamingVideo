@@ -1,0 +1,33 @@
+# Một ALB cho cả 4 service, chia theo đường dẫn. ALB public nhưng security group chỉ mở cho CloudFront
+# (k8s/gitops/dev thêm annotation security-groups). /internal/* của catalog không có rule nên không ra ngoài.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: streamforge-api
+  namespace: streamforge
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/manage-backend-security-group-rules: "true"
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service: { name: streamforge-account, port: { name: http } }
+          - path: /api/uploads
+            pathType: Prefix
+            backend:
+              service: { name: streamforge-upload, port: { name: http } }
+          - path: /api/videos
+            pathType: Prefix
+            backend:
+              service: { name: streamforge-catalog, port: { name: http } }
+          - path: /api/playback
+            pathType: Prefix
+            backend:
+              service: { name: streamforge-playback, port: { name: http } }
