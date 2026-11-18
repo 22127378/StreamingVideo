@@ -4,6 +4,7 @@
 //   /api/uploads/*   upload      xin URL upload, xác nhận upload xong
 //   /api/videos/*    catalog     danh sách, chi tiết, đánh giá, xoá
 //   /api/playback/*  playback    cấp vé xem (signed cookies)
+//   /api/live/*      live        kênh phát trực tiếp, đăng ký kênh, bình luận
 import { getAccessToken } from './auth.js';
 
 export class ApiError extends Error {
@@ -67,6 +68,31 @@ export const completeUpload = (videoId) => request('POST', `/uploads/${videoId}/
  * Sau đó trình phát tải HLS bình thường, trình duyệt tự gửi cookie (cùng domain).
  */
 export const startPlayback = (id) => request('POST', `/playback/${id}`);
+
+// ---------------- Live
+/** Danh sách kênh, đang phát trước; đã đăng nhập thì mỗi kênh có subscribed */
+export const listChannels = () => request('GET', '/live/channels');
+
+export const getChannel = (id) => request('GET', `/live/channels/${id}`);
+
+export const setSubscription = (id, subscribed) =>
+  request(subscribed ? 'PUT' : 'DELETE', `/live/channels/${id}/subscription`);
+
+/** Không có after: các bình luận mới nhất. Có after: bình luận có id lớn hơn after */
+export const listMessages = (id, after) => request('GET', `/live/channels/${id}/messages?${qs({ after })}`);
+
+export const sendMessage = (id, body) => request('POST', `/live/channels/${id}/messages`, { body: { body } });
+
+export const deleteMessage = (id, messageId) => request('DELETE', `/live/channels/${id}/messages/${messageId}`);
+
+/** Kênh của mình, kèm địa chỉ ingest và khoá stream cho OBS (404 khi chưa có kênh) */
+export const getStudio = () => request('GET', '/live/studio');
+
+export const createChannel = (title) => request('POST', '/live/studio', { body: { title } });
+
+export const updateStudio = (title) => request('PUT', '/live/studio', { body: { title } });
+
+export const resetStreamKey = () => request('POST', '/live/studio/stream-key');
 
 export const getMe = () => request('GET', '/auth/me');
 

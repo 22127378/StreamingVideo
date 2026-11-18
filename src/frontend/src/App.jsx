@@ -3,6 +3,9 @@ import { getMe, upgradeToPremium } from './api.js';
 import { initAuth, isLoggedIn, logout, refreshSession, sessionEmail, setDevSession } from './auth.js';
 import AuthModal from './components/AuthModal.jsx';
 import HomePage from './pages/HomePage.jsx';
+import LiveChannelPage from './pages/LiveChannelPage.jsx';
+import LivePage from './pages/LivePage.jsx';
+import StudioPage from './pages/StudioPage.jsx';
 import UploadPage from './pages/UploadPage.jsx';
 import WatchPage from './pages/WatchPage.jsx';
 import { href, useRoute } from './router.js';
@@ -87,6 +90,9 @@ export default function App() {
           <a href={href.home} className={route.page === 'home' ? 'active' : ''}>
             Trang chủ
           </a>
+          <a href={href.live} className={['live', 'channel', 'studio'].includes(route.page) ? 'active' : ''}>
+            Trực tiếp
+          </a>
           <a href={href.upload} className={route.page === 'upload' ? 'active' : ''}>
             Đăng video
           </a>
@@ -127,6 +133,9 @@ export default function App() {
         <WatchPage id={route.id} user={user} onLogin={login} onUpgrade={upgrade} upgrading={upgrading} />
       )}
       {ready && route.page === 'upload' && <UploadPage user={user} onLogin={login} />}
+      {ready && route.page === 'live' && <LivePage user={user} />}
+      {ready && route.page === 'channel' && <LiveChannelPage id={route.id} user={user} onLogin={login} />}
+      {ready && route.page === 'studio' && <StudioPage user={user} onLogin={login} />}
     </div>
   );
 }

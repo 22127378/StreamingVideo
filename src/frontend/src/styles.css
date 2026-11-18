@@ -1347,3 +1347,288 @@ a.thumb:hover {
     display: none;
   }
 }
+
+/* ---------- Trực tiếp */
+.muted {
+  color: var(--muted);
+}
+
+.live-page,
+.studio {
+  display: grid;
+  gap: 20px;
+}
+
+.live-page section h2 {
+  margin-bottom: 12px;
+}
+
+.channel-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.channel-card {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.channel-card:hover,
+.channel-card.live {
+  border-color: var(--accent);
+}
+
+.channel-cover {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, var(--surface-2), var(--bg));
+}
+
+.channel-initial {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.channel-initial.small {
+  width: 40px;
+  height: 40px;
+  font-size: 1rem;
+  flex: none;
+}
+
+.live-badge,
+.offline-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.live-badge {
+  background: #dc2626;
+  color: #fff;
+}
+
+.offline-badge {
+  background: rgba(11, 13, 18, 0.8);
+  color: var(--muted);
+}
+
+.live-badge.inline,
+.offline-badge.inline {
+  position: static;
+  display: inline-block;
+  margin: 0;
+}
+
+.channel-meta {
+  padding: 10px 12px 12px;
+}
+
+.channel-meta p {
+  margin: 0;
+}
+
+.channel-meta .title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-meta .sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.channel-owner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.channel-owner > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-owner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Bình luận */
+.live-chat {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 12px;
+  height: min(70vh, 640px);
+  padding: 16px;
+}
+
+.chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.chat-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.chat-message {
+  position: relative;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding-right: 18px;
+}
+
+.chat-time {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-right: 6px;
+}
+
+.chat-name {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.chat-name.subscriber {
+  color: var(--ok);
+}
+
+.chat-name.owner {
+  color: var(--accent);
+}
+
+.chat-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.chat-badge.subscriber {
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--ok);
+}
+
+.chat-badge.owner {
+  background: rgba(249, 115, 22, 0.18);
+  color: var(--accent);
+}
+
+.chat-delete {
+  position: absolute;
+  right: 0;
+  top: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.chat-delete:hover {
+  color: var(--danger);
+}
+
+.chat-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.chat-form .muted {
+  flex: 1;
+}
+
+/* Studio */
+.studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.studio-card {
+  display: grid;
+  gap: 12px;
+}
+
+.studio-card form {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.studio-card .field {
+  width: 100%;
+}
+
+.studio-card p {
+  margin: 0;
+}
+
+.copy-field {
+  display: flex;
+  gap: 6px;
+}
+
+.copy-field input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 960px) {
+  .live-chat {
+    height: 480px;
+  }
+}
