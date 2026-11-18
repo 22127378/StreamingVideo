@@ -9,10 +9,18 @@ export { createRateLimiter };
 
 /**
  * @param {{ service: string, metrics: ReturnType<import('./metrics.js').createMetrics>,
- *   routes: (app: express.Express) => void, trustProxyHops?: number }} options
+ *   routes: (app: express.Express) => void, trustProxyHops?: number, faultRate?: number, random?: () => number }} options
  *   routes: gắn route của service vào app (trước 404 và error handler)
+ *   faultRate: tỉ lệ request /api/* bị trả 500 giả (0..1), chỉ để thử canary tự rollback. Mặc định 0.
  */
-export function createHttpApp({ service, metrics, routes, trustProxyHops = parseInt(process.env.TRUST_PROXY_HOPS || '0', 10) }) {
+export function createHttpApp({
+  service,
+  metrics,
+  routes,
+  trustProxyHops = parseInt(process.env.TRUST_PROXY_HOPS || '0', 10),
+  faultRate = parseFloat(process.env.FAULT_INJECT_5XX_RATE || '0') || 0,
+  random = Math.random,
+}) {
   const app = express();
 
   // Sau CloudFront + ALB, req.ip phải lấy từ X-Forwarded-For thay vì IP của proxy
@@ -54,6 +62,18 @@ export function createHttpApp({ service, metrics, routes, trustProxyHops = parse
     res.status(200).json({ status: 'UP', service: `streamforge-${service}`, timestamp: new Date().toISOString() });
   });
   app.get('/metrics', metrics.handler);
+
+  // Fault injection để thử Argo Rollouts: đặt FAULT_INJECT_5XX_RATE cho bản canary, phân tích Prometheus
+  // thấy tỉ lệ 5xx tăng và tự rollback. Đặt sau middleware ghi metric để lỗi giả cũng được đếm.
+  if (faultRate > 0) {
+    console.warn(`FAULT_INJECT_5XX_RATE=${faultRate}: failing that share of /api requests on purpose`);
+    app.use('/api', (req, res, next) => {
+      if (random() < faultRate) {
+        return res.status(500).json({ success: false, message: 'Injected fault (FAULT_INJECT_5XX_RATE)' });
+      }
+      next();
+    });
+  }
 
   routes(app);
 

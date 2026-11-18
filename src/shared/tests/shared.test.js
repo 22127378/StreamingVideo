@@ -55,3 +55,25 @@ test('rate limiter blocks after max requests per window', () => {
   t = 61_000;
   assert.equal(run(), 200, 'new window');
 });
+
+test('fault injection fails only /api requests, and only when enabled', async () => {
+  const { createHttpApp } = await import('../src/http.js');
+  const { createMetrics } = await import('../src/metrics.js');
+  const routes = (app) => app.get('/api/ping', (req, res) => res.json({ ok: true }));
+  const listen = (opts) => createHttpApp({ service: 'faulty', metrics: createMetrics('faulty'), routes, ...opts }).listen(0);
+  const get = async (server, path) => (await fetch(`http://127.0.0.1:${server.address().port}${path}`)).status;
+
+  const off = listen({ faultRate: 0 });
+  const on = listen({ faultRate: 0.5, random: () => 0.1 });
+  const lucky = listen({ faultRate: 0.5, random: () => 0.9 });
+  try {
+    assert.equal(await get(off, '/api/ping'), 200);
+    assert.equal(await get(on, '/api/ping'), 500);
+    assert.equal(await get(on, '/health'), 200, 'health checks never fail');
+    assert.equal(await get(lucky, '/api/ping'), 200);
+  } finally {
+    off.close();
+    on.close();
+    lucky.close();
+  }
+});
