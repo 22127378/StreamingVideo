@@ -83,6 +83,9 @@ async function ensureServiceUser(client, { schema, user, database, password, log
   await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${user}`);
   await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${user}`);
   await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${user}`);
+  // Cột serial/bigserial: INSERT gọi nextval() nên cần quyền trên sequence
+  await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${user}`);
+  await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT USAGE, SELECT ON SEQUENCES TO ${user}`);
   // Không cho service đọc bảng migration
   await client.query(`REVOKE ALL ON ${schema}.schema_migrations FROM ${user}`);
   log(`user ${user} ready on schema ${schema} (${onAurora ? 'IAM auth' : 'password auth'})`);
