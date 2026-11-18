@@ -114,6 +114,38 @@ jobs:
             echo "::endgroup::"
           done
 
+  checkov:
+    name: Checkov (Terraform and Kubernetes)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install checkov==3.4.5
+
+      # Quyết định chung nằm trong .checkov.yaml; ngoại lệ từng tài nguyên ghi ngay tại tài nguyên
+      - name: Scan Terraform
+        run: checkov --config-file .checkov.yaml -d terraform --framework terraform
+
+      # Quét manifest đã render như lúc deploy: overlay tạm gắn tag image bằng commit SHA
+      # (base để trống tag, overlay của repo cấu hình mới đặt tag)
+      - name: Scan Kubernetes manifests
+        run: |
+          mkdir -p ci-overlay rendered
+          {
+            echo "resources: [../k8s/app/base, ../k8s/db]"
+            echo "images:"
+            for img in account upload catalog playback worker; do
+              echo "  - { name: streamforge-$img, newTag: \"$GITHUB_SHA\" }"
+            done
+          } > ci-overlay/kustomization.yaml
+          kubectl kustomize ci-overlay > rendered/all.yaml
+          checkov --config-file .checkov.yaml -d rendered --framework kubernetes
+
   image:
     name: Build and scan ${{ matrix.service }} image
     needs: test
