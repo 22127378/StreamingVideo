@@ -56,4 +56,11 @@ export const config = {
   maxSourceDurationSeconds: parseInt(process.env.MAX_SOURCE_DURATION_SECONDS || '1800', 10),
   maxSourceDimension: parseInt(process.env.MAX_SOURCE_DIMENSION || '4096', 10),
   uploadConcurrency: parseInt(process.env.S3_UPLOAD_CONCURRENCY || '8', 10),
+  // service: chạy mãi, xử lý message liên tục (docker compose, chạy local).
+  // job: mỗi process xử lý tối đa 1 message rồi thoát (KEDA ScaledJob trên EKS).
+  workerMode: process.env.WORKER_MODE === 'job' ? 'job' : 'service',
+  // Chế độ job: chờ message tối đa chừng này giây, không có thì thoát (0 = chờ mãi)
+  jobIdleTimeoutSeconds: parseInt(process.env.JOB_IDLE_TIMEOUT_SECONDS || '300', 10),
+  // Chế độ job: giữ process thêm chừng này giây sau khi xong để Prometheus kịp lấy metric cuối
+  metricsLingerSeconds: parseInt(process.env.METRICS_LINGER_SECONDS || '15', 10),
 };

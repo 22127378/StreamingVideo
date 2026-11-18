@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { installConsoleBridge } from './logger.js';
 import { startSQSConsumer } from './services/sqsConsumer.js';
 import { config } from './config/aws.js';
@@ -6,11 +7,12 @@ import { startMetricsServer } from './metrics.js';
 installConsoleBridge();
 startMetricsServer();
 
-console.log('StreamForge Transcode Worker Service Started');
+const jobMode = config.workerMode === 'job';
+console.log(`StreamForge Transcode Worker started (${jobMode ? 'job: tối đa 1 video rồi thoát' : 'service'})`);
 console.log(`SQS Queue: ${config.transcodeQueueUrl}`);
 console.log(`S3 Raw Bucket: ${config.rawBucket}`);
 console.log(`S3 Processed Bucket: ${config.processedBucket}`);
-console.log(`Database: ${process.env.DB_HOST || 'localhost'}/${process.env.DB_NAME || 'streamforge'}`);
+console.log(`Event bus: ${process.env.EVENT_BUS_NAME || '(not set)'}`);
 
 // stopController: ngừng nhận message mới. jobController: hủy job đang chạy.
 const stopController = new AbortController();
@@ -38,9 +40,17 @@ const handleShutdown = (signal) => {
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
-startSQSConsumer({ stopSignal: stopController.signal, jobSignal: jobController.signal })
-  .then(() => {
-    console.log('Worker đã dừng an toàn.');
+startSQSConsumer({
+  stopSignal: stopController.signal,
+  jobSignal: jobController.signal,
+  ...(jobMode ? { maxJobs: 1, idleTimeoutSeconds: config.jobIdleTimeoutSeconds } : {}),
+})
+  .then(async ({ processed, reason }) => {
+    // Pod của Job sống ngắn: chờ một nhịp scrape để Prometheus lấy được metric của job vừa xong
+    if (jobMode && processed > 0 && !stopController.signal.aborted) {
+      await sleep(config.metricsLingerSeconds * 1000, undefined, { signal: stopController.signal }).catch(() => {});
+    }
+    console.log(`Worker đã dừng an toàn (${reason}, ${processed} message).`);
     process.exit(0);
   })
   .catch((err) => {

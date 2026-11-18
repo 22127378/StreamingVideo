@@ -10,8 +10,8 @@ import { fileURLToPath } from 'url';
 import { sqsClient, config } from '../config/aws.js';
 import { logger } from '../logger.js';
 import { transcodeDuration, transcodeInProgress, transcodeJobs } from '../metrics.js';
+import { EVENT_TYPES, publishEvent } from '@streamforge/shared/events';
 import { downloadFileFromS3, uploadDirectoryToS3 } from './s3Service.js';
-import { updateVideoStatus } from './videoRepository.js';
 import {
   probeVideo,
   generateThumbnail,
@@ -81,6 +81,35 @@ async function deleteMessage(receiptHandle) {
       ReceiptHandle: receiptHandle,
     })
   );
+}
+
+// Worker không đọc hay ghi database: kết quả được báo bằng sự kiện (TranscodeStarted/Completed/Failed)
+// qua EventBridge, catalog-service nhận và cập nhật trạng thái video.
+let publisher = publishEvent;
+
+/** Thay hàm phát sự kiện (test) */
+export function setEventPublisher(fn) {
+  publisher = fn;
+}
+
+/**
+ * Phát một sự kiện, thử lại tối đa 3 lần. required=false thì lỗi chỉ ghi log
+ * (ví dụ TranscodeStarted: thiếu cũng không sao, video vẫn đang PROCESSING).
+ */
+async function report(type, detail, { required = false } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await publisher('transcode', type, detail);
+      return;
+    } catch (err) {
+      if (attempt >= 3) {
+        if (required) throw err;
+        console.warn(`[Events] Không phát được ${type} cho ${detail.videoId}: ${err.message}`);
+        return;
+      }
+      await sleep(attempt * 1000);
+    }
+  }
 }
 
 /** Lỗi do chính video nguồn (quá dài, quá lớn): không retry */
@@ -176,18 +205,18 @@ export async function processTranscodeMessage(message, { signal } = {}) {
   try {
     signal?.throwIfAborted();
 
-    // 1. Cập nhật database sang PROCESSING. Video đã bị xóa thì bỏ job này luôn.
+    // 1. Tải video gốc từ S3. Không còn file nghĩa là video đã bị xoá: bỏ job luôn.
     try {
-      await updateVideoStatus(videoId, 'PROCESSING', { attempt: receiveCount });
+      await downloadFileFromS3(rawBucket, rawS3Key, rawLocalPath, { signal });
     } catch (err) {
-      if (err.name !== 'VideoGoneError') throw err;
+      if (err.name !== 'NoSuchKey' && err.$metadata?.httpStatusCode !== 404) throw err;
       await deleteMessage(message.ReceiptHandle);
-      console.warn(`[Worker] Video ${videoId} không còn tồn tại hoặc đang bị xóa, bỏ qua job`);
+      console.warn(`[Worker] Không còn file gốc của video ${videoId} (đã bị xoá), bỏ qua job`);
       return 'skipped';
     }
 
-    // 2. Tải video gốc từ S3
-    await downloadFileFromS3(rawBucket, rawS3Key, rawLocalPath, { signal });
+    // 2. Báo catalog: đang xử lý, lần thử thứ n
+    await report(EVENT_TYPES.TranscodeStarted, { videoId, attempt: receiveCount });
 
     // 3. Phân tích thông số video (ffprobe)
     console.log('[Worker] Đang phân tích thông số video gốc...');
@@ -222,7 +251,7 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     // 8. Upload toàn bộ thư mục HLS lên S3 Processed Bucket
     await uploadDirectoryToS3(hlsOutputDir, processedBucket, videoId, { signal });
 
-    // 9. Cập nhật database sang READY
+    // 9. Báo catalog: xong (video thành READY). Không phát được thì để SQS giao lại job.
     const qualities = successfulVariants.map((v) => ({
       resolution: v.profile.name,
       width: v.width,
@@ -231,13 +260,17 @@ export async function processTranscodeMessage(message, { signal } = {}) {
       path: `${v.dir}/${v.playlist}`,
     }));
 
-    await updateVideoStatus(videoId, 'READY', {
-      duration: Math.round(meta.duration),
-      masterPlaylistUrl: `${config.cdnBaseUrl}/${videoId}/master.m3u8`,
-      thumbnailUrl: `${config.cdnBaseUrl}/${videoId}/thumbnail.jpg`,
-      qualities,
-      processedAt: new Date().toISOString(),
-    });
+    await report(
+      EVENT_TYPES.TranscodeCompleted,
+      {
+        videoId,
+        duration: Math.round(meta.duration),
+        qualities,
+        processedBucket,
+        processedAt: new Date().toISOString(),
+      },
+      { required: true }
+    );
 
     // 10. Xóa Message khỏi SQS Queue
     await deleteMessage(message.ReceiptHandle);
@@ -259,9 +292,13 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     if (error instanceof RejectedSourceError) {
       console.warn(`[Worker] Từ chối video ${videoId}: ${errorMessage}`);
       stopHeartbeat();
-      await updateVideoStatus(videoId, 'FAILED', { errorMessage, attempt: receiveCount }).catch((e) =>
-        console.error(`[Worker] Không cập nhật được trạng thái của ${videoId}:`, e.message)
-      );
+      await report(EVENT_TYPES.TranscodeFailed, {
+        videoId,
+        attempt: receiveCount,
+        final: true,
+        rejected: true,
+        error: errorMessage,
+      });
       await deleteMessage(message.ReceiptHandle);
       return 'rejected';
     }
@@ -269,19 +306,13 @@ export async function processTranscodeMessage(message, { signal } = {}) {
     console.error(`[Worker] Xử lý video ${videoId} thất bại:`, error);
     const plan = planFailure(receiveCount, config);
 
-    // Message không bị xóa: SQS sẽ giao lại, hoặc chuyển sang DLQ ở lần cuối
-    try {
-      if (plan.final) {
-        await updateVideoStatus(videoId, 'FAILED', { errorMessage, attempt: receiveCount });
-      } else {
-        await updateVideoStatus(videoId, 'PROCESSING', {
-          lastError: errorMessage,
-          attempt: receiveCount,
-        });
-      }
-    } catch (dbErr) {
-      console.error(`[Worker] Không cập nhật được trạng thái lỗi của ${videoId}:`, dbErr.message);
-    }
+    // Message không bị xóa: SQS sẽ giao lại, hoặc chuyển sang DLQ ở lần cuối (final: video FAILED)
+    await report(EVENT_TYPES.TranscodeFailed, {
+      videoId,
+      attempt: receiveCount,
+      final: plan.final,
+      error: errorMessage,
+    });
 
     stopHeartbeat();
     if (plan.final) {
@@ -312,16 +343,35 @@ export async function processTranscodeMessage(message, { signal } = {}) {
  *   stopSignal: ngừng nhận message mới (hủy luôn lệnh long poll đang chờ)
  *   jobSignal: hủy job đang chạy và trả message về queue
  */
-export async function startSQSConsumer({ stopSignal, jobSignal } = {}) {
+/**
+ * Nhận và xử lý message từ SQS.
+ * @param {{ stopSignal?: AbortSignal, jobSignal?: AbortSignal, maxJobs?: number, idleTimeoutSeconds?: number }} options
+ *   maxJobs: xử lý đủ chừng này message thì dừng (Infinity = chạy mãi).
+ *   idleTimeoutSeconds: không nhận được message nào trong chừng này giây thì dừng (0 = chờ mãi).
+ * @returns {Promise<{ processed: number, reason: 'stopped' | 'max_jobs' | 'idle' }>}
+ */
+export async function startSQSConsumer({ stopSignal, jobSignal, maxJobs = Infinity, idleTimeoutSeconds = 0 } = {}) {
   console.log(`[Worker] Đang lắng nghe hàng đợi SQS: ${config.transcodeQueueUrl}`);
+  let processed = 0;
+  let idleSince = Date.now();
 
   while (!stopSignal?.aborted) {
+    if (processed >= maxJobs) {
+      console.log(`[Worker] Đã xử lý ${processed} message, dừng.`);
+      return { processed, reason: 'max_jobs' };
+    }
+    if (idleTimeoutSeconds > 0 && Date.now() - idleSince >= idleTimeoutSeconds * 1000) {
+      console.log(`[Worker] Không có message trong ${idleTimeoutSeconds}s, dừng.`);
+      return { processed, reason: 'idle' };
+    }
+
     let response;
     try {
       response = await sqsClient.send(
         new ReceiveMessageCommand({
           QueueUrl: config.transcodeQueueUrl,
-          MaxNumberOfMessages: config.maxNumberOfMessages,
+          // Không nhận nhiều hơn số message còn được phép xử lý
+          MaxNumberOfMessages: Math.min(config.maxNumberOfMessages, maxJobs - processed),
           WaitTimeSeconds: config.pollingWaitTimeSeconds,
           VisibilityTimeout: config.visibilityTimeout,
           AttributeNames: ['All'],
@@ -337,6 +387,7 @@ export async function startSQSConsumer({ stopSignal, jobSignal } = {}) {
       continue;
     }
 
+    if (response.Messages?.length) idleSince = Date.now();
     for (const message of response.Messages || []) {
       // Đã nhận tín hiệu tắt trước khi bắt đầu message này: trả lại queue
       if (stopSignal?.aborted) {
@@ -366,8 +417,10 @@ export async function startSQSConsumer({ stopSignal, jobSignal } = {}) {
       } catch (processErr) {
         console.error(`[Worker] Lỗi xử lý message:`, processErr.message);
       }
+      processed += 1;
     }
   }
 
   console.log('[Worker] Đã ngừng nhận message mới.');
+  return { processed, reason: 'stopped' };
 }

@@ -34,7 +34,7 @@ ffmpeg.setFfprobePath(FFMPEG_BINARIES.ffprobe);
 // Bảng cấu hình các profile độ phân giải và bitrate cho Adaptive Bitrate Streaming (HLS)
 // Gói Free xem tối đa 720p. Biến thể cao hơn nằm trong hd/, còn lại trong sd/, để CloudFront chặn
 // theo đường dẫn: cookie của gói Free chỉ mở /videos/{id}/sd/*, của Premium mở /videos/{id}/*.
-// Phải khớp FREE_MAX_HEIGHT trong src/api/src/services/playbackService.js.
+// Phải khớp FREE_MAX_HEIGHT trong src/shared/src/access.js.
 export const FREE_MAX_HEIGHT = 720;
 
 /** Thư mục con của một biến thể: 'hd' (chỉ Premium) hoặc 'sd' */
