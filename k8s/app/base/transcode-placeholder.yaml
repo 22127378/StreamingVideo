@@ -1,0 +1,81 @@
+# Pod giữ chỗ cho pool transcode (overprovisioning). Worker ScaledJob scale về 0 khi queue rỗng,
+# nhưng video đầu tiên không phải chờ cấp máy Spot (~55-75s) và kéo image FFmpeg:
+#   - Pod này xin đúng requests của một Job worker nên Karpenter giữ sẵn một node transcode.
+#   - Nó chạy chính image worker (chỉ "sleep"), nên image đã nằm trên node khi Job đến.
+#   - Priority -10 thấp hơn Job (0): Job mới đuổi pod này và chạy ngay trên node đó. Pod giữ chỗ
+#     quay lại Pending, Karpenter cấp node mới cho nó, nên luôn có chỗ cho video kế tiếp.
+# Số replica do ScaledObject (cron) bên dưới quyết định: ngoài khung giờ thì 0 pod, node bị thu hồi.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamforge-transcode-placeholder
+  namespace: streamforge
+  labels:
+    app: streamforge-transcode-placeholder
+spec:
+  # Không đặt replicas: KEDA (HPA) quản lý, ArgoCD không so sánh trường này
+  selector:
+    matchLabels:
+      app: streamforge-transcode-placeholder
+  template:
+    metadata:
+      labels:
+        app: streamforge-transcode-placeholder
+    spec:
+      priorityClassName: streamforge-placeholder
+      # Bị đuổi thì nhường chỗ ngay
+      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: false
+      nodeSelector:
+        streamforge.io/pool: transcode
+      tolerations:
+        - key: streamforge.io/workload
+          operator: Equal
+          value: transcode
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: placeholder
+          # Cùng image (và tag, do overlay đặt) với worker để node có sẵn image
+          image: streamforge-worker
+          command: ["sleep", "infinity"]
+          # Bằng requests của Job worker (worker.yaml) để giữ đủ chỗ cho đúng một Job.
+          # Limit không được nhỏ hơn request; "sleep" không dùng tới nên đặt bằng nhau.
+          resources:
+            requests:
+              cpu: 1500m
+              memory: 2Gi
+              ephemeral-storage: 10Gi
+            limits:
+              cpu: 1500m
+              memory: 2Gi
+              ephemeral-storage: 10Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+# Bật pod giữ chỗ trong giờ có người dùng, tắt ban đêm (0 pod, 0 node, $0).
+# Overlay đặt lại lịch và số replica theo PLACEHOLDER_* của k8s/deploy.sh.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: streamforge-transcode-placeholder
+  namespace: streamforge
+spec:
+  scaleTargetRef:
+    name: streamforge-transcode-placeholder
+  minReplicaCount: 0
+  maxReplicaCount: 4
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Ho_Chi_Minh
+        start: "0 8 * * *"
+        end: "0 0 * * *"
+        desiredReplicas: "1"

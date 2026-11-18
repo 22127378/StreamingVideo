@@ -1,0 +1,19 @@
+# Ưu tiên của pool transcode. Job worker (0) cao hơn pod giữ chỗ (-10), nên khi có video mới
+# scheduler đuổi pod giữ chỗ và chạy Job ngay trên node Spot đã sẵn sàng thay vì chờ Karpenter cấp máy.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: streamforge-placeholder
+value: -10
+preemptionPolicy: Never
+globalDefault: false
+description: Placeholder pods that keep a warm transcode node; evicted first when a real job needs room
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: streamforge-transcode
+value: 0
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: Transcode worker jobs; may preempt placeholder pods

@@ -18,8 +18,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TF="$ROOT/terraform/layers"
 REGION=${AWS_REGION:-us-east-1}
 KEDA_VERSION=2.20.2
-# Số Job worker luôn chờ sẵn (chống cold start). 1 ~ +$22/tháng tiền Spot; 0 = không giữ Job nào khi rảnh
-WORKER_MIN_REPLICAS=${WORKER_MIN_REPLICAS:-1}
+# Worker scale về 0. Pod giữ chỗ (k8s/app/base/transcode-placeholder.yaml) giữ sẵn node Spot và image
+# trong khung giờ cron dưới đây (giờ Việt Nam) để video đầu tiên không chịu cold start.
+# Mỗi replica giữ 1 node, khoảng $0.03/giờ Spot; PLACEHOLDER_REPLICAS=0 để tắt hẳn.
+PLACEHOLDER_REPLICAS=${PLACEHOLDER_REPLICAS:-1}
+PLACEHOLDER_START=${PLACEHOLDER_START:-0 8 * * *}
+PLACEHOLDER_END=${PLACEHOLDER_END:-0 0 * * *}
 # Thư mục ArgoCD đồng bộ (commit vào Git)
 GITOPS="$ROOT/k8s/gitops/dev"
 
@@ -192,9 +196,19 @@ patches:
       - op: replace
         path: /spec/triggers/0/metadata/queueURL
         value: $QUEUE_URL
+  - target:
+      kind: ScaledObject
+      name: streamforge-transcode-placeholder
+    patch: |-
       - op: replace
-        path: /spec/minReplicaCount
-        value: $WORKER_MIN_REPLICAS
+        path: /spec/triggers/0/metadata/start
+        value: "$PLACEHOLDER_START"
+      - op: replace
+        path: /spec/triggers/0/metadata/end
+        value: "$PLACEHOLDER_END"
+      - op: replace
+        path: /spec/triggers/0/metadata/desiredReplicas
+        value: "$PLACEHOLDER_REPLICAS"
   - target:
       kind: Namespace
       name: streamforge

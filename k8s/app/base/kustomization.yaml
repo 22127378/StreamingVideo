@@ -6,3 +6,4 @@ resources:
   - services.yaml
   - ingress.yaml
   - worker.yaml
+  - transcode-placeholder.yaml

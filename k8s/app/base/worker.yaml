@@ -35,6 +35,8 @@ spec:
         # Job: process thoát là xong, không khởi động lại tại chỗ. Lỗi transcode được thử lại qua SQS.
         restartPolicy: Never
         serviceAccountName: streamforge-worker
+        # Cao hơn pod giữ chỗ (transcode-placeholder.yaml): được chạy ngay trên node đã ấm
+        priorityClassName: streamforge-transcode
         # Lớn hơn SHUTDOWN_GRACE_SECONDS (25s) để worker kịp trả message về queue
         terminationGracePeriodSeconds: 40
         nodeSelector:
@@ -63,11 +65,12 @@ spec:
             env:
               - name: SERVICE_NAME
                 value: worker
-              # Mỗi pod xử lý tối đa 1 video rồi thoát; chờ message tối đa 5 phút
+              # Mỗi pod xử lý tối đa 1 video rồi thoát. Job chỉ được tạo khi có message, nên chờ
+              # ngắn (phòng trường hợp message đã bị Job khác nhận trước).
               - name: WORKER_MODE
                 value: job
               - name: JOB_IDLE_TIMEOUT_SECONDS
-                value: "300"
+                value: "60"
               # User DB của worker (SELECT/UPDATE trên videos), đăng nhập bằng token IAM
               - name: DB_USER
                 value: streamforge_worker
@@ -97,10 +100,9 @@ spec:
           - name: tmp
             emptyDir:
               sizeLimit: 1Gi
-  # Provisioned: luôn có sẵn 1 Job đang chờ message (và 1 máy Spot) để video đầu tiên không phải chờ
-  # cấp máy (~55-75s). Job chờ quá JOB_IDLE_TIMEOUT_SECONDS thì thoát và KEDA tạo Job mới thay.
-  # Overlay đặt lại theo WORKER_MIN_REPLICAS của k8s/deploy.sh; 0 = không giữ Job nào khi rảnh.
-  minReplicaCount: 1
+  # Scale to zero: queue rỗng thì không có Job nào. Cold start do pod giữ chỗ
+  # (transcode-placeholder.yaml) xử lý: node Spot và image đã sẵn, Job chỉ mất vài giây để chạy.
+  minReplicaCount: 0
   maxReplicaCount: 4
   pollingInterval: 15
   successfulJobsHistoryLimit: 5
@@ -109,8 +111,7 @@ spec:
   rollout:
     strategy: gradual
   scalingStrategy:
-    # Số Job cần tạo = số message (kể cả đang xử lý) - số Job đang chạy. Job đang chờ cũng được tính,
-    # nên 1 message mới đến khi đã có Job chờ sẵn thì không tạo thêm.
+    # Số Job cần tạo = số message (kể cả đang xử lý) - số Job đang chạy
     strategy: default
   triggers:
     - type: aws-sqs-queue

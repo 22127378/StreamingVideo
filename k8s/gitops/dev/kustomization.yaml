@@ -50,9 +50,19 @@ patches:
       - op: replace
         path: /spec/triggers/0/metadata/queueURL
         value: https://sqs.us-east-1.amazonaws.com/728384804953/streamforge-dev-transcode
+  - target:
+      kind: ScaledObject
+      name: streamforge-transcode-placeholder
+    patch: |-
       - op: replace
-        path: /spec/minReplicaCount
-        value: 1
+        path: /spec/triggers/0/metadata/start
+        value: "0 8 * * *"
+      - op: replace
+        path: /spec/triggers/0/metadata/end
+        value: "0 0 * * *"
+      - op: replace
+        path: /spec/triggers/0/metadata/desiredReplicas
+        value: "1"
   - target:
       kind: Namespace
       name: streamforge
