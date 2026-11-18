@@ -60,7 +60,9 @@ for layer in auth database services; do
   (cd terraform/layers/$layer && terraform init -backend-config=../../backend.hcl && terraform apply)
 done
 
-./k8s/deploy.sh      # build + push image lên ECR, NodePool, KEDA, migrate DB, API, worker; in ra DNS của ALB
+git clone git@github.com:22127378/StreamingVideo-config.git ../StreamingVideo-config
+./k8s/deploy.sh      # NodePool, KEDA, Argo Rollouts, secret, migrate DB, các service, worker; ghi envs/dev
+                     # của repo cấu hình (build image nếu CI chưa đẩy); in ra DNS của ALB
 
 cd terraform/layers/delivery
 terraform init -backend-config=../../backend.hcl
@@ -72,21 +74,36 @@ SKIP_BUILD=1 ./k8s/deploy.sh    # trỏ CDN_BASE_URL sang CloudFront
 (cd terraform/layers/observability && terraform init -backend-config=../../backend.hcl && terraform apply)
 ./k8s/monitoring/install.sh     # Prometheus, Loki, Alloy, Grafana tại /grafana
 
-./k8s/argocd/install.sh         # ArgoCD + Application streamforge (GitOps, xem bên dưới)
+(cd ../StreamingVideo-config && git commit -am "Configure dev" && git push)
+./k8s/argocd/install.sh         # ArgoCD + Application root (App-of-Apps, xem bên dưới)
 ```
 
-### Cập nhật ứng dụng bằng GitOps (ArgoCD)
+### CI/CD và GitOps (GitHub OIDC, repo cấu hình, ArgoCD App-of-Apps, Argo Rollouts)
 
-Sau khi cài ArgoCD, ứng dụng được deploy từ Git chứ không apply bằng tay:
+Một lần cho mỗi account (layer này không bị `k8s/teardown.sh` xoá):
 
-1. `./k8s/deploy.sh`: build và push image lên ECR, làm phần chuẩn bị trên cụm (NodePool, KEDA, namespace, secret), rồi ghi tag image và cấu hình vào `k8s/gitops/dev`.
-2. Commit và push `k8s/gitops/dev` (cùng code) lên nhánh `main`.
-3. ArgoCD (Application `streamforge`) thấy thay đổi trong khoảng 3 phút và đồng bộ: ConfigMap, Job migration (phải xong trước), rồi API và worker. Có `prune` (xoá thứ đã bỏ khỏi Git) và `selfHeal` (sửa tay trên cụm sẽ bị đưa về đúng Git).
+```bash
+(cd terraform/layers/cicd && terraform init -backend-config=../../backend.hcl && terraform apply)
+```
 
-`k8s/gitops/dev` chỉ có định danh tài nguyên (account ID, URL queue, security group, ID Cognito), không có bí mật. Secret (`streamforge-secrets`, `streamforge-cloudfront`) do `deploy.sh` tạo thẳng trên cụm và ArgoCD không quản lý.
+Trên GitHub, repo code: Settings → Secrets and variables → Actions
 
-- Xem trạng thái: `kubectl -n argocd get application streamforge`.
+- Variable `AWS_CI_ROLE_ARN` = output `github_ci_role_arn` của layer `cicd`.
+- Variable `CONFIG_REPOSITORY` = `22127378/StreamingVideo-config`.
+- Secret `CONFIG_REPO_DEPLOY_KEY` = khoá riêng của một deploy key (`ssh-keygen -t ed25519`) mà khoá công khai được thêm vào repo cấu hình với quyền ghi.
+
+Sau đó mỗi lần push lên `main`:
+
+1. CI chạy test, Checkov, build image và Trivy. Qua hết thì assume role CI bằng GitHub OIDC (chỉ được push vào ECR, chỉ từ nhánh `main`) và đẩy image với tag là 7 ký tự đầu của commit.
+2. CI commit vào repo cấu hình: mọi `newTag` và `ref=` của manifest gốc trong `envs/dev/kustomization.yaml` thành commit đó.
+3. ArgoCD (Application `streamforge`, con của `root`) thấy thay đổi trong khoảng 3 phút và đồng bộ: ConfigMap, Job migration (phải xong trước), rồi các Rollout và worker. Có `prune` (xoá thứ đã bỏ khỏi Git) và `selfHeal` (sửa tay trên cụm sẽ bị đưa về đúng Git).
+4. Argo Rollouts chạy canary cho từng service HTTP: 1 pod bản mới nhận khoảng nửa traffic trong 3 phút, phân tích Prometheus đo tỉ lệ 5xx và p95 của riêng pod canary mỗi phút; không đạt thì tự quay về bản cũ.
+
+`k8s/deploy.sh` vẫn dùng cho phần chuẩn bị trên cụm (secret, lần deploy đầu) và khi cần build tay: nó ghi `envs/dev` của bản clone repo cấu hình (mặc định `../StreamingVideo-config`, đổi bằng `CONFIG_REPO_DIR`). `envs/dev` chỉ có định danh tài nguyên (account ID, URL queue, security group, ID Cognito), không có bí mật. Secret (`streamforge-secrets`, `streamforge-cloudfront`) do `deploy.sh` tạo thẳng trên cụm và ArgoCD không quản lý.
+
+- Xem trạng thái: `kubectl -n argocd get applications`, `kubectl argo rollouts -n streamforge list rollouts` (cần plugin `kubectl-argo-rollouts`).
 - Mở UI: `kubectl -n argocd port-forward svc/argocd-server 8443:443`, vào `https://localhost:8443`, user `admin`, mật khẩu: `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
+- Quay về bản trước bằng tay: `git revert` commit của CI trong repo cấu hình.
 - Cần apply gấp không qua Git: `DIRECT_APPLY=1 ./k8s/deploy.sh`. ArgoCD sẽ đưa cụm về đúng Git ở lần đồng bộ sau.
 
 Layer `delivery` và `observability` đọc nhau qua biến trong `terraform.tfvars` (DNS của ALB, ID của distribution), không đọc state của nhau.

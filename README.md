@@ -2,11 +2,11 @@
 
 A video streaming platform on AWS EKS. Personal project, June to August 2026.
 
-Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. Transcode workers scale on queue depth and run on Spot, premium videos are protected with CloudFront signed cookies, and no pod holds long-lived AWS keys. The EKS control plane and NAT gateway alone cost roughly $105 a month while the cluster exists, so the cluster is meant to be created for demos and destroyed afterwards.
+Users upload a video, a worker transcodes it into adaptive bitrate HLS with FFmpeg, and players stream it through CloudFront. Users can also go live from OBS through Amazon IVS, with channel subscriptions and live chat. Transcode workers scale on queue depth and run on Spot, premium videos are protected with CloudFront signed cookies, and no pod holds long-lived AWS keys. The EKS control plane and NAT gateway alone cost roughly $105 a month while the cluster exists, so the cluster is meant to be created for demos and destroyed afterwards.
 
 ## Current state
 
-StreamForge is split into microservices. Each one has its own image, Deployment, IAM role and, where it stores data, its own database schema and user. Services never read each other's tables: they talk through events on an EventBridge bus, plus one internal HTTP call from playback to catalog.
+StreamForge is split into microservices. Each one has its own image, Argo Rollout, IAM role and, where it stores data, its own database schema and user. Services never read each other's tables: they talk through events on an EventBridge bus, plus one internal HTTP call from playback to catalog.
 
 | Service | Public routes | Does | Owns |
 | --- | --- | --- | --- |
@@ -14,9 +14,10 @@ StreamForge is split into microservices. Each one has its own image, Deployment,
 | `src/upload-service` | `/api/uploads/*` | Presigned S3 upload URL, confirm upload | schema `upload` |
 | `src/catalog-service` | `/api/videos/*` | List, detail, my videos, ratings, views, delete; builds its data from events | schema `catalog` |
 | `src/playback-service` | `/api/playback/*` | Access check, CloudFront signed cookies, view events | nothing (stateless) |
+| `src/live-service` | `/api/live/*` | Live channels on Amazon IVS, stream keys for OBS, subscriptions, live chat | schema `live` |
 | `src/transcode-worker` | none | FFmpeg to HLS (KEDA ScaledJob on Spot) | nothing |
 
-`src/shared` holds the code they share (HTTP setup, token checks, logging, metrics, database pool, migrations, events). `src/frontend` is the React app. Monitoring runs on the cluster (Prometheus, Loki, Alloy, Grafana, `k8s/monitoring/`), and ArgoCD syncs `k8s/gitops/dev` from `main`.
+`src/shared` holds the code they share (HTTP setup, token checks, logging, metrics, database pool, migrations, events). `src/frontend` is the React app. Monitoring runs on the cluster (Prometheus, Loki, Alloy, Grafana, `k8s/monitoring/`), and ArgoCD syncs the cluster from a separate config repository, [StreamingVideo-config](https://github.com/22127378/StreamingVideo-config).
 
 Events (source `streamforge.<service>`):
 
@@ -30,7 +31,7 @@ playback  --VideoViewed-------------------------------> catalog   (view count)
 
 The catalog applies events idempotently (it records event ids) and only when the current status allows it, because SQS does not keep order. Events for a deleted video are dropped, and HLS files a worker writes after a delete are removed.
 
-Not built yet: a custom domain, Argo Rollouts, and the deploy half of CI/CD (images are built by `k8s/deploy.sh`, not by GitHub Actions).
+Not built yet: a custom domain, and ALB weighted target groups for canaries (canary traffic is split by pod count).
 
 ## Running locally
 
@@ -40,9 +41,9 @@ Requirements: Docker. Node.js 22 or newer to run tests outside Docker.
 docker compose --profile app up -d --build
 ```
 
-This starts LocalStack (S3, SQS, EventBridge with the same rules as AWS), PostgreSQL, the two migration jobs, the four services, the worker and an nginx gateway on http://localhost:4000 that routes `/api/*` like the ALB does. Then run the frontend with `cd src/frontend && npm install && npm run dev` (http://localhost:5173). Without Cognito, sign in with any email and pick a tier.
+This starts LocalStack (S3, SQS, EventBridge with the same rules as AWS), PostgreSQL, the three migration jobs, the five services, the worker, MediaMTX (stands in for Amazon IVS: RTMP in on port 1935, HLS out on port 8888) and an nginx gateway on http://localhost:4000 that routes `/api/*` like the ALB does. Then run the frontend with `cd src/frontend && npm install && npm run dev` (http://localhost:5173). Without Cognito, sign in with any email and pick a tier.
 
-Tests per package: `npm test` in `src/shared`, `src/*-service` and `src/transcode-worker`. The upload and catalog suites also run against PostgreSQL with `DB_TEST=1` (see the comment at the top of each test file). After changing `src/shared`, run `npm install` in the services: they install it as a copy (`install-links=true`).
+Tests per package: `npm test` in `src/shared`, `src/*-service` and `src/transcode-worker`. The upload, catalog and live suites also run against PostgreSQL with `DB_TEST=1` (see the comment at the top of each test file). After changing `src/shared`, run `npm install` in the services: they install it as a copy (`install-links=true`).
 
 Test scenarios for the deployed stack (functional, security, resilience and k6 load tests) are in `docs/test-plan.md`, with scripts under `tests/`.
 
@@ -56,11 +57,11 @@ Test scenarios for the deployed stack (functional, security, resilience and k6 l
               ── /videos/*    → S3 processed (HLS), signed cookie required
               ── /api/*       → ALB (open to CloudFront only)
                                  │
-          ┌──────────────┬───────┴──────┬────────────────┐
-          ▼              ▼              ▼                ▼
-   /api/auth        /api/uploads    /api/videos     /api/playback
-   account          upload          catalog ◀────── playback
-   (Cognito)        (schema upload) (schema catalog)  internal HTTP
+          ┌──────────────┬───────┴──────┬────────────────┬───────────────┐
+          ▼              ▼              ▼                ▼               ▼
+   /api/auth        /api/uploads    /api/videos     /api/playback    /api/live
+   account          upload          catalog ◀────── playback         live (schema live)
+   (Cognito)        (schema upload) (schema catalog)  internal HTTP  manages IVS channels
                         │               ▲
                         │ events        │ events (SQS catalog-events)
                         ▼               │
@@ -69,6 +70,8 @@ Test scenarios for the deployed stack (functional, security, resilience and k6 l
                  │ all streamforge.* events → catalog │
                  └────────────────────────────────────┘
    Aurora PostgreSQL Serverless v2: one cluster, one schema and one IAM-auth user per service
+
+   OBS ──RTMPS──▶ Amazon IVS ──HLS (IVS CDN)──▶ Browser    live video never passes through the cluster
 ```
 
 Editable diagrams of both the local flow and the AWS design are in `docs/architecture.drawio` (open it at app.diagrams.net or with the Draw.io VS Code extension).
@@ -80,15 +83,16 @@ In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally
 | Layer | Technology |
 | --- | --- |
 | Container orchestration | AWS EKS |
-| Infrastructure | Terraform (6 modules, 10 layers) |
+| Infrastructure | Terraform (6 modules, 12 layers) |
 | Networking | VPC, CloudFront, ALB |
 | Storage | S3 for video assets and Terraform state, Aurora PostgreSQL Serverless v2 |
 | Messaging | EventBridge, SQS, DLQ |
 | Transcoding | FFmpeg on Spot instances |
-| Autoscaling | KEDA ScaledJob, one Kubernetes Job per queued video |
-| GitOps | ArgoCD with a separate config repo |
-| CI/CD | GitHub Actions, Argo Rollouts |
-| Monitoring and scanning | Prometheus, Loki, Alloy, Grafana, CloudWatch alarms, Trivy |
+| Live streaming | Amazon IVS (MediaMTX locally), chat over PostgreSQL |
+| Autoscaling | KEDA ScaledJob (scale to zero) plus a placeholder pod against cold starts |
+| GitOps | ArgoCD App-of-Apps with a separate config repo |
+| CI/CD | GitHub Actions with GitHub OIDC, Argo Rollouts canary with Prometheus analysis |
+| Monitoring and scanning | Prometheus, Loki, Alloy, Grafana, CloudWatch alarms, Trivy, Checkov |
 | Security | Cognito, EKS Pod Identity, IAM database auth, CloudFront signed cookies, KMS |
 
 ## Infrastructure
@@ -98,6 +102,7 @@ Terraform lives in `terraform/`, split into layers that are applied separately. 
 | Layer | Status | Contents |
 | --- | --- | --- |
 | backend | Built | State bucket (versioned, KMS-encrypted, TLS only), AWS Budget alarm |
+| cicd | Built | GitHub OIDC provider and the CI role that pushes images to ECR (main branch only). Applied once, kept across teardowns |
 | storage | Built | Raw and processed S3 buckets. The old DynamoDB `videos` table is still here until it is removed |
 | messaging | Built | Transcode SQS queue and DLQ |
 | identity | Built | IAM policies for the worker (and the old API's dev roles, to be removed) |
@@ -106,10 +111,10 @@ Terraform lives in `terraform/`, split into layers that are applied separately. 
 | delivery | Built | CloudFront: frontend bucket, HLS from the processed bucket via OAC behind a signed-cookie key group, `/api/*` and `/grafana*` to the ALB |
 | auth | Built | Cognito user pool, app client and the `premium` and `admin` groups |
 | database | Built | Aurora PostgreSQL 17 Serverless v2 (pauses after 10 idle minutes), master secret in Secrets Manager |
-| services | Built | EventBridge bus and rules, catalog event queue and DLQ, one IAM role and Pod Identity per service, database connect rights per service user |
+| services | Built | EventBridge bus and rules, catalog event queue and DLQ, one IAM role and Pod Identity per service (live: IVS channels), database connect rights per service user |
 | observability | Built | SNS alert topic, Loki bucket, Pod Identity for Loki, Alertmanager and Grafana, CloudWatch alarms on the DLQ, stuck queue and CloudFront 5xx |
 
-The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA running the worker as a ScaledJob (one Job per video, scaled to zero, with a placeholder pod keeping a warm node to avoid cold starts), a migration Job for the database, and `k8s/deploy.sh` to build, push and apply. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, EKS Pod Identity replaces IRSA, and ArgoCD reads its manifests from `k8s/gitops/dev` in this repository instead of a separate config repo.
+The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA running the worker as a ScaledJob (one Job per video, scaled to zero, with a placeholder pod keeping a warm node to avoid cold starts), migration Jobs for the database, and `k8s/deploy.sh` for the one-time cluster bootstrap. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and EKS Pod Identity replaces IRSA: each service account maps to its own least-privilege IAM role through a Pod Identity association, with no OIDC provider for the cluster and no role annotations on the service accounts.
 
 Transcode jobs come from the upload service's `VideoUploaded` event, not from S3 notifications, so each confirmed upload is transcoded exactly once.
 
@@ -135,29 +140,56 @@ The worker runs as a KEDA ScaledJob: for every message in the SQS queue KEDA sta
 
 ## GitOps and delivery
 
-ArgoCD runs in the cluster (`k8s/argocd/`) and watches `k8s/gitops/dev` on `main`. A sync applies the ConfigMaps, runs the database migration Job as a Sync hook and waits for it, then rolls out the API and the worker ScaledJob. Automated sync has prune and self-heal on, so hand edits on the cluster are reverted to what Git says. Secrets stay out of Git: `k8s/deploy.sh` creates them on the cluster.
+```
+git push main ─▶ GitHub Actions: tests, Checkov, build, Trivy
+                     │ GitHub OIDC ─▶ STS ─▶ CI role (push to ECR only)
+                     ▼
+                 ECR: images tagged with the commit SHA
+                     │
+                     ▼
+                 StreamingVideo-config: envs/dev newTag + base ref = that commit
+                     │
+                     ▼
+                 ArgoCD (App-of-Apps) ─▶ migration Jobs ─▶ Argo Rollouts canary
+                                                            │ Prometheus analysis
+                                                            ├─ pass: promote
+                                                            └─ fail: abort, back to stable
+```
 
-```
-Today:   k8s/deploy.sh (build, push to ECR, write image tag) -> git push -> ArgoCD sync
-Planned: GitHub Actions (test, Trivy, push to ECR via OIDC, write image tag) -> ArgoCD sync -> Argo Rollouts
-```
+ArgoCD runs in the cluster (`k8s/argocd/`). `install.sh` applies a single root Application that syncs `apps/` of the config repository: cluster resources (NodePools, PriorityClasses, IngressClass), KEDA, Argo Rollouts and the app, in that order through sync waves. The app's `envs/dev` pins the base manifests of this repository (`k8s/app/base`, `k8s/db`) to the same commit as the image tags, so a deploy never mixes manifests and images from different commits. Rolling back by hand is a `git revert` in the config repository. Automated sync has prune and self-heal on, so hand edits on the cluster are reverted to what Git says. Secrets stay out of Git: `k8s/deploy.sh` creates them on the cluster.
+
+Each HTTP service is an Argo Rollout. A new version starts as one canary pod taking about half the traffic for three minutes while a shared `ClusterAnalysisTemplate` (`k8s/app/base/analysis.yaml`) queries Prometheus every minute for the canary pods only: 5xx rate under 5% and p95 latency under one second. The first failed measurement aborts the rollout and traffic goes back to the stable pods. To rehearse it, set `FAULT_INJECT_5XX_RATE=0.5` on one service in a commit, drive some traffic (`SCENARIO=smoke ./tests/load/run.sh api.js`) and watch `kubectl argo rollouts -n streamforge get rollout streamforge-catalog --watch`.
 
 | Stage | Tool | Status |
 | --- | --- | --- |
-| Build and test | GitHub Actions | Built (tests, Trivy scan, Terraform checks) |
-| Image build and push | `k8s/deploy.sh` | Built; moving it to GitHub Actions with OIDC is planned |
-| Deploy | ArgoCD | Built, syncing from this repository |
-| Progressive rollout | Argo Rollouts | Planned: canary with Prometheus analysis and automatic rollback |
+| Build and test | GitHub Actions | Built (unit and PostgreSQL tests, Terraform fmt/validate) |
+| Policy and image scanning | Checkov, Trivy | Built, both block the pipeline |
+| Image push | GitHub Actions with GitHub OIDC | Built, `main` only |
+| Config update | GitHub Actions with a deploy key | Built, commits to the config repository |
+| Deploy | ArgoCD App-of-Apps | Built |
+| Progressive rollout | Argo Rollouts | Built: canary, Prometheus analysis, automatic rollback |
+
+CI needs, in the repository settings: variable `AWS_CI_ROLE_ARN` (output `github_ci_role_arn` of `terraform/layers/cicd`), variable `CONFIG_REPOSITORY` (`22127378/StreamingVideo-config`) and secret `CONFIG_REPO_DEPLOY_KEY` (private half of a deploy key with write access on the config repository). Without them CI still tests and scans, it just does not publish.
+
+## Live streaming
+
+Each signed-in user can open one channel from the Studio page (`#/studio`). The live service creates an Amazon IVS channel for it and shows the RTMPS ingest address and stream key to paste into OBS; the key can be rotated. Video goes from OBS to IVS and from IVS's CDN to viewers, never through the cluster. The service tracks which channels are live with `ListStreams` (cached for a few seconds), and the Live page (`#/live`) lists live channels first, then the ones you subscribed to.
+
+On a channel page viewers can subscribe and chat. Chat messages live in the service's own schema; browsers poll for new ones every two seconds using the last message id they have, so any pod can answer and no WebSocket or shared broker is needed. Every message shows a badge for the channel owner and for subscribers, worked out from the current subscription when messages are read, so unsubscribing removes the badge. Owners can delete messages, each user can post at most one message per second, and messages older than seven days are pruned. Names shown publicly are the part of the email before the `@`.
+
+Locally MediaMTX takes IVS's place: OBS publishes to `rtmp://localhost:1935/live` with the key from the Studio page, and MediaMTX asks the live service (`/internal/live/auth`) whether the key matches before accepting the stream.
 
 ## Security
 
 | Concern | Approach |
 | --- | --- |
-| CI/CD authentication | GitHub OIDC, so CI holds no static AWS keys |
-| Pod permissions | EKS Pod Identity, one least-privilege IAM role per service |
+| CI/CD authentication | GitHub OIDC, so CI holds no static AWS keys; the role only pushes to ECR from `main` |
+| Pod permissions | EKS Pod Identity (not IRSA), one least-privilege IAM role per service |
 | User sign-in | Cognito with SRP, so the password is never sent as plain text |
 | Database access | IAM auth tokens instead of stored passwords, TLS required |
 | Container scanning | Trivy in CI blocks images with known CVEs |
+| Infrastructure scanning | Checkov on Terraform and rendered Kubernetes manifests; exceptions are written next to the resource with a reason, project-wide ones in `.checkov.yaml` |
+| Pod hardening | Non-root, read-only root filesystem, no capabilities, no service account token mounted |
 | Origin access | The ALB only accepts traffic from CloudFront |
 | Content protection | Short-lived CloudFront signed cookies per tier |
 | State encryption | Terraform state in S3, encrypted with KMS |
@@ -195,9 +227,13 @@ Requirements: AWS CLI v2, Terraform 1.10 or newer, kubectl, Helm 3 and Docker. T
 backend -> storage -> messaging -> identity -> networking -> compute
         -> auth -> database -> services -> observability -> delivery
 
-./k8s/deploy.sh              # images, KEDA, DB migrations, the four services and the worker
-./k8s/monitoring/install.sh  # Prometheus, Loki, Alloy, Grafana
-./k8s/argocd/install.sh      # ArgoCD, then commit and push k8s/gitops/dev to deploy
+terraform -chdir=terraform/layers/cicd apply   # once: GitHub OIDC role for CI
+
+git clone git@github.com:22127378/StreamingVideo-config.git ../StreamingVideo-config
+./k8s/deploy.sh              # secrets, DB migrations, writes ../StreamingVideo-config/envs/dev
+(cd ../StreamingVideo-config && git commit -am "Configure dev" && git push)
+./k8s/argocd/install.sh      # ArgoCD and the root Application; it installs KEDA, Argo Rollouts and the app
+./k8s/monitoring/install.sh  # Prometheus, Loki, Alloy, Grafana (needed by the canary analysis)
 ./src/frontend/deploy.sh     # build the frontend and upload it to the web bucket
 BASE_URL=https://<cloudfront-domain> ./tests/e2e/smoke.sh
 ```
@@ -207,7 +243,7 @@ BASE_URL=https://<cloudfront-domain> ./tests/e2e/smoke.sh
 ```
 streamforge/
 ├── docker-compose.yml            # LocalStack, PostgreSQL, services, worker and gateway (--profile app)
-├── docker/                       # service.Dockerfile, worker.Dockerfile, gateway.nginx.conf
+├── docker/                       # Dockerfiles, gateway.nginx.conf, mediamtx.yml
 ├── docs/                         # architecture.drawio, test-plan.md
 ├── scripts/                      # LocalStack init, demo data
 ├── src/
@@ -216,21 +252,22 @@ streamforge/
 │   ├── upload-service/           # /api/uploads, schema upload
 │   ├── catalog-service/          # /api/videos, schema catalog, event consumer
 │   ├── playback-service/         # /api/playback
+│   ├── live-service/             # /api/live, schema live, Amazon IVS
 │   ├── transcode-worker/         # FFmpeg transcoding worker
 │   └── frontend/                 # React app
 ├── k8s/
-│   ├── cluster/                  # NodePools, IngressClass, StorageClass
-│   ├── app/                      # the four services, worker (KEDA ScaledJob), Ingress
-│   ├── db/                       # Migration Jobs (catalog, upload)
-│   ├── gitops/dev/               # What ArgoCD syncs: image tags and config (written by deploy.sh)
-│   ├── argocd/                   # ArgoCD values, Application, install script
+│   ├── cluster/                  # NodePools, PriorityClasses, IngressClass, StorageClass
+│   ├── app/                      # five Rollouts, canary analysis, worker (KEDA ScaledJob), placeholder, Ingress
+│   ├── db/                       # Migration Jobs (catalog, upload, live)
+│   ├── argocd/                   # ArgoCD values, root Application (App-of-Apps), install script
 │   ├── monitoring/               # Helm values, alert rules, Grafana dashboard
 │   └── deploy.sh
 ├── tests/                        # e2e smoke test, k6 load tests
-├── .github/workflows/ci.yml      # Tests, image build, Trivy scan, Terraform checks
+├── .checkov.yaml                 # Project-wide Checkov decisions
+├── .github/workflows/ci.yml      # Tests, Checkov, image build, Trivy, push via OIDC, config repo update
 └── terraform/
     ├── modules/                  # backend, budget, s3, sqs, dynamodb, app-iam
-    └── layers/                   # backend, storage, messaging, identity, networking, compute,
+    └── layers/                   # backend, cicd, storage, messaging, identity, networking, compute,
                                   # auth, database, services, observability, delivery
 ```
 

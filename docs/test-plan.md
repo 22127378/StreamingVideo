@@ -66,6 +66,9 @@ Các kịch bản sau chưa có trong script, kiểm tra tay:
 | S5 | Token giả hoặc hết hạn | Token ký bằng secret khác | 401 |
 | S6 | `videoId` không phải UUID | `GET /api/videos/abc`, `DELETE /api/videos/..%2F..` | 400 |
 | S7 | Pod chỉ có quyền tối thiểu | `kubectl -n streamforge logs -l app=streamforge-worker --tail=200` khi chạy F10 | Không có `AccessDenied` |
+| S8 | Khoá stream không lộ | `GET /api/live/channels` và `/api/live/channels/<id>` không đăng nhập | Không có `streamKey`, `ingestEndpoint` |
+| S9 | Khoá stream cũ hết hiệu lực | Studio → Đổi khoá stream khi OBS đang phát bằng khoá cũ | OBS bị ngắt, không phát lại được bằng khoá cũ |
+| S10 | CI không có key AWS | Settings → Secrets của repo code | Không có `AWS_ACCESS_KEY_ID`; job push ECR dùng role qua OIDC. Workflow chạy từ pull request không assume được role |
 
 ## 3. Phục hồi
 
@@ -78,6 +81,26 @@ Chạy trong lúc `pipeline-burst.sh` đang transcode.
 | R3 | Mất một pod API | `kubectl -n streamforge delete pod <một pod api>` | Không có request lỗi, vì PDB giữ ít nhất 1 pod và ALB bỏ target hỏng |
 | R4 | Scale to zero | Chờ khoảng 3 phút sau khi queue rỗng | Không còn Job worker nào (`kubectl -n streamforge get jobs -l app=streamforge-worker`). Trong khung giờ placeholder: còn đúng `PLACEHOLDER_REPLICAS` pod `streamforge-transcode-placeholder` Running và node `transcode` của chúng. Ngoài khung giờ: 0 pod, node `transcode` bị thu hồi |
 | R5 | Placeholder giảm cold start | Trong khung giờ, upload 1 video khi không có Job nào | Pod placeholder bị đuổi (`kubectl get events` có `Preempted`), pod Job chuyển Running trong vài giây, không chờ node mới. Placeholder quay lại Pending rồi Running trên node mới |
+
+## 3b. Live streaming
+
+| # | Kịch bản | Cách làm | Kỳ vọng |
+| --- | --- | --- | --- |
+| L1 | Tạo kênh | Đăng nhập, mở `#/studio`, Tạo kênh | Có Server `rtmps://...` và Stream key; tạo lại vẫn là kênh cũ |
+| L2 | Phát từ OBS | Dán Server và Stream key vào OBS, Start Streaming | Trong ~15 giây kênh hiện ở mục Đang phát của `#/live`, trang kênh tự phát video |
+| L3 | Đăng ký kênh | Tài khoản khác bấm Đăng ký | Số người đăng ký +1, nút chuyển Đã đăng ký; tự đăng ký kênh mình bị từ chối |
+| L4 | Huy hiệu bình luận | Chủ kênh, người đã đăng ký, người chưa đăng ký cùng bình luận | Lần lượt có huy hiệu Chủ kênh, Người đăng ký, không huy hiệu; người khác thấy bình luận trong ~2 giây |
+| L5 | Huỷ đăng ký | Người đăng ký bấm lại nút | Huy hiệu Người đăng ký biến mất ở các bình luận cũ của họ |
+| L6 | Chống spam | Gửi 2 bình luận trong 1 giây | Bình luận thứ hai bị 429 |
+| L7 | Chủ kênh xoá bình luận | Chủ kênh bấm × trên một bình luận | Bình luận biến mất; người khác bấm × nhận 403 |
+
+## 3c. Canary và rollback (Argo Rollouts)
+
+| # | Kịch bản | Cách làm | Kỳ vọng |
+| --- | --- | --- | --- |
+| C1 | Bản tốt được promote | Push một thay đổi nhỏ của catalog lên `main`, chạy `SCENARIO=smoke ./tests/load/run.sh api.js` trong lúc canary | `kubectl argo rollouts -n streamforge get rollout streamforge-catalog` đi qua 50% → pause 3m → 100%, AnalysisRun `Successful` |
+| C2 | Bản lỗi tự rollback | Thêm `FAULT_INJECT_5XX_RATE=0.5` vào env của catalog trong `k8s/app/base/services.yaml`, push, tạo traffic như C1 | Trong ~2-3 phút AnalysisRun `Failed` (error-rate), Rollout `Degraded`/aborted, pod canary bị scale về 0, mọi request lại đi vào bản stable. Gỡ biến rồi push để tiếp tục |
+| C3 | Không có traffic | Deploy lúc không ai dùng | Phân tích coi là đạt (không có mẫu), Rollout vẫn hoàn tất |
 
 ## 4. Stress test
 
