@@ -1,8 +1,8 @@
 # Đăng nhập bằng Amazon Cognito.
 # - Người dùng tự đăng ký bằng email, đăng nhập qua trang có sẵn của Cognito (OAuth code + PKCE).
-# - Gói Premium = thành viên group "premium". API (POST /api/auth/upgrade) thêm người dùng vào group.
-# - API xác minh access token; frontend nhận cấu hình qua GET /api/auth/config.
-# Áp dụng sau layer delivery (cần domain CloudFront cho callback URL) và compute (role của pod API).
+# - Gói Premium = thành viên group "premium". account-service (POST /api/auth/upgrade) thêm người dùng vào group.
+# - Mỗi service tự xác minh access token; frontend nhận cấu hình qua GET /api/auth/config (account-service).
+# Áp dụng sau layer delivery (cần domain CloudFront cho callback URL).
 
 locals {
   layer = "auth"
@@ -103,24 +103,7 @@ resource "aws_cognito_user_pool_client" "web" {
   enable_token_revocation       = true
 }
 
-# Pod API được thêm người dùng vào group premium (POST /api/auth/upgrade)
-data "aws_iam_role" "api_pod" {
-  name = "${local.name_prefix}-api-pod"
-}
-
-data "aws_iam_policy_document" "api_cognito" {
-  statement {
-    sid       = "UpgradeToPremium"
-    actions   = ["cognito-idp:AdminAddUserToGroup"]
-    resources = [aws_cognito_user_pool.this.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "api_cognito" {
-  name   = "cognito-upgrade"
-  role   = data.aws_iam_role.api_pod.name
-  policy = data.aws_iam_policy_document.api_cognito.json
-}
+# Quyền thêm người dùng vào group premium thuộc về account-service (terraform/layers/services).
 
 output "user_pool_id" {
   value = aws_cognito_user_pool.this.id

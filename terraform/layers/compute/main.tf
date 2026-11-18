@@ -32,10 +32,6 @@ data "aws_subnets" "private" {
   tags = { Tier = "private" }
 }
 
-data "aws_iam_policy" "api" {
-  name = "${local.name_prefix}-api"
-}
-
 data "aws_iam_policy" "worker" {
   name = "${local.name_prefix}-worker"
 }
@@ -75,8 +71,9 @@ module "eks" {
 }
 
 # ---------------- Container registry
+# Một repository cho mỗi image: 4 service HTTP và worker
 resource "aws_ecr_repository" "app" {
-  for_each = toset(["api", "worker"])
+  for_each = toset(["worker", "account", "upload", "catalog", "playback"])
 
   name                 = "${local.name_prefix}-${each.key}"
   image_tag_mutability = "IMMUTABLE"
@@ -156,11 +153,6 @@ resource "aws_iam_policy" "keda" {
 
 locals {
   pod_identities = {
-    api = {
-      namespace       = local.namespace
-      service_account = "streamforge-api"
-      policy_arn      = data.aws_iam_policy.api.arn
-    }
     worker = {
       namespace       = local.namespace
       service_account = "streamforge-worker"

@@ -1,17 +1,17 @@
 # Aurora PostgreSQL Serverless v2: metadata video (thay DynamoDB).
 #
 # - Nằm trong subnet private, chỉ nhận kết nối 5432 từ pod trong cụm EKS (security group của cluster).
-# - App không có mật khẩu DB: pod API và worker kết nối bằng IAM database authentication (token 15 phút
-#   sinh từ credentials Pod Identity), mỗi service một user DB (streamforge_api, streamforge_worker).
-# - Mật khẩu master do RDS quản lý trong Secrets Manager; chỉ Job migration (k8s/db/) dùng nó để tạo schema,
-#   tạo user DB và chép dữ liệu cũ từ DynamoDB.
+# - Service không có mật khẩu DB: catalog và upload kết nối bằng IAM database authentication (token 15 phút
+#   sinh từ credentials Pod Identity). Mỗi service một user và một schema riêng (streamforge_catalog/catalog,
+#   streamforge_upload/upload); quyền rds-db:connect nằm ở layer services. Worker không dùng database.
+# - Mật khẩu master do RDS quản lý trong Secrets Manager; chỉ Job migration (k8s/db/) dùng nó để tạo schema
+#   và user DB.
 # Áp dụng sau networking và compute (cần cluster để lấy security group), trước khi deploy app.
 
 locals {
   layer        = "database"
   cluster_name = local.name_prefix
   db_name      = "streamforge"
-  db_users     = ["streamforge_api", "streamforge_worker"]
 }
 
 variable "engine_version" {
@@ -20,9 +20,9 @@ variable "engine_version" {
 }
 
 variable "min_capacity" {
-  description = "Minimum ACU. 0 lets the cluster auto-pause when idle (near $0) but the first query after a pause waits ~15s; 0.5 keeps it warm (~$44/month)"
+  description = "Minimum ACU. 0 lets the cluster auto-pause after 10 idle minutes (near $0 compute) but the first query after a pause waits ~15s; 0.5 keeps it warm (~$44/month)"
   type        = number
-  default     = 0.5
+  default     = 0
 }
 
 variable "max_capacity" {
@@ -140,27 +140,7 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   retention_in_days = 14
 }
 
-# ---------------- Quyền kết nối bằng IAM cho pod API và worker
-data "aws_iam_role" "pod" {
-  for_each = toset(["api", "worker"])
-  name     = "${local.name_prefix}-${each.key}-pod"
-}
-
-data "aws_iam_policy_document" "connect" {
-  for_each = toset(["api", "worker"])
-  statement {
-    sid       = "ConnectAsServiceUser"
-    actions   = ["rds-db:connect"]
-    resources = ["arn:aws:rds-db:${var.aws_region}:${local.account_id}:dbuser:${aws_rds_cluster.this.cluster_resource_id}/streamforge_${each.key}"]
-  }
-}
-
-resource "aws_iam_role_policy" "connect" {
-  for_each = toset(["api", "worker"])
-  name     = "aurora-connect"
-  role     = data.aws_iam_role.pod[each.key].name
-  policy   = data.aws_iam_policy_document.connect[each.key].json
-}
+# Quyền rds-db:connect của từng service (user streamforge_catalog, streamforge_upload) nằm ở layer services.
 
 # ---------------- Job migration (k8s/db/migrate-job.yaml): mật khẩu master + đọc DynamoDB cũ để chép dữ liệu
 data "aws_iam_policy_document" "pod_identity_trust" {

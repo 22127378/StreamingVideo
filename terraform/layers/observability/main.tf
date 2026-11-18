@@ -186,6 +186,15 @@ locals {
       periods     = 1
       threshold   = 0
     }
+    catalog-events-dlq-not-empty = {
+      description = "Catalog không xử lý được sự kiện sau 10 lần (DLQ streamforge-dev-catalog-events-dlq): video có thể sai trạng thái, xem log catalog trong Grafana"
+      namespace   = "AWS/SQS"
+      metric      = "ApproximateNumberOfMessagesVisible"
+      dimensions  = { QueueName = "${local.name_prefix}-catalog-events-dlq" }
+      statistic   = "Maximum"
+      periods     = 1
+      threshold   = 0
+    }
     transcode-queue-stuck = {
       description = "Job cũ nhất trong hàng đợi đã chờ hơn 15 phút: worker không chạy hoặc không nhận được máy Spot"
       namespace   = "AWS/SQS"
