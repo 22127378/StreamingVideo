@@ -225,3 +225,42 @@ jobs:
           fi
           docker tag "streamforge-${{ matrix.service }}:$GITHUB_SHA" "$REGISTRY/$REPOSITORY:$tag"
           docker push "$REGISTRY/$REPOSITORY:$tag"
+
+  # Mọi image của commit đã lên ECR: ghi tag và ref của manifest vào repo cấu hình, ArgoCD tự đồng bộ.
+  # Cần biến CONFIG_REPOSITORY (owner/name) và secret CONFIG_REPO_DEPLOY_KEY (deploy key có quyền ghi,
+  # chỉ cho repo cấu hình).
+  update-config:
+    name: Update the config repository
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_CI_ROLE_ARN != '' && vars.CONFIG_REPOSITORY != ''
+    runs-on: ubuntu-24.04
+    # Hai lần chạy liên tiếp không push chồng lên nhau
+    concurrency:
+      group: config-repository
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.CONFIG_REPOSITORY }}
+          ssh-key: ${{ secrets.CONFIG_REPO_DEPLOY_KEY }}
+          path: config
+
+      - name: Point envs/dev at this commit
+        working-directory: config
+        run: |
+          tag=${GITHUB_SHA::7}
+          file=envs/dev/kustomization.yaml
+          # Manifest gốc và image cùng một commit
+          sed -i -E \
+            -e "s#(StreamingVideo//k8s/(app/base|db)\?ref=)[0-9a-f]+#\1${GITHUB_SHA}#" \
+            -e "s#^(\s+newTag: ).*#\1${tag}#" \
+            "$file"
+          if git diff --quiet; then
+            echo "envs/dev already points at $tag"
+            exit 0
+          fi
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Deploy ${GITHUB_REPOSITORY}@${tag}" -m "Source: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          git push
