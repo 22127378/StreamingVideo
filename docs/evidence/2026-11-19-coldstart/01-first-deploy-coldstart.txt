@@ -1,0 +1,29 @@
+# Cold start lần deploy đầu trên cụm mới (máy mới, chưa có image), chụp lúc 2026-11-19T08:22:48Z
+
+pod                                                   chờ máy  kéo image  khởi động  sẵn sàng  chạy job     tổng  node
+----------------------------------------------------------------------------------------------------------------------
+streamforge-migrate-catalog-wm7s7                         23s       9.3s        17s         -       15s      55s  i-0efe2ba8e7aa3cce7 (máy mới)
+streamforge-migrate-live-22qcf                            22s       8.3s        17s         -       16s      55s  i-0efe2ba8e7aa3cce7 (máy mới)
+streamforge-migrate-upload-2hv66                          21s       8.8s        17s         -       15s      53s  i-0efe2ba8e7aa3cce7 (máy mới)
+streamforge-account-64496567c5-5dmnb                       0s      17.6s        26s       11s         -      37s  i-0d1f6bcd82848bc17
+streamforge-account-64496567c5-ggnwl                       0s      17.7s        26s       11s         -      37s  i-0d1f6bcd82848bc17
+streamforge-catalog-5449d5dbb5-6m4nx                       1s      14.8s        25s       10s         -      36s  i-0d1f6bcd82848bc17
+streamforge-catalog-5449d5dbb5-npxtz                       0s      14.8s        26s       10s         -      36s  i-0d1f6bcd82848bc17
+streamforge-live-c74b57647-6qr7n                           0s      11.6s        24s       11s         -      35s  i-0d1f6bcd82848bc17
+streamforge-live-c74b57647-k6rsl                           0s      11.6s        24s       11s         -      35s  i-0d1f6bcd82848bc17
+streamforge-playback-7df4d5fbfb-krpqb                      0s      10.4s        22s       11s         -      33s  i-0d1f6bcd82848bc17
+streamforge-playback-7df4d5fbfb-kx58j                      0s      10.5s        22s       11s         -      33s  i-0d1f6bcd82848bc17
+streamforge-transcode-placeholder-d564d7fcb-gvclm         23s       7.6s        27s        0s         -      50s  i-0b5f0bbd963ec77ef (máy mới)
+streamforge-upload-7bb8dbfddc-dxbcm                        0s      10.4s        22s       10s         -      32s  i-0d1f6bcd82848bc17
+streamforge-upload-7bb8dbfddc-ldzjp                        0s      10.6s        22s       11s         -      33s  i-0d1f6bcd82848bc17
+
+Job (tạo -> bắt đầu -> xong)
+streamforge-migrate-catalog              tạo 08:20:41  xong sau 59s
+streamforge-migrate-live                 tạo 08:20:42  xong sau 58s
+streamforge-migrate-upload               tạo 08:20:43  xong sau 57s
+
+# Máy (node) và thời điểm tạo
+NAME                  CREATED                POOL        TYPE         CAPACITY
+i-0b5f0bbd963ec77ef   2026-11-19T08:20:50Z   transcode   c5.large     spot
+i-0d1f6bcd82848bc17   2026-11-19T08:17:46Z   app         t3a.medium   on-demand
+i-0efe2ba8e7aa3cce7   2026-11-19T08:21:03Z   app         t3a.medium   on-demand

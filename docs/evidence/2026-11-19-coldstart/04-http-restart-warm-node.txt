@@ -1,0 +1,11 @@
+# Khởi động lại dịch vụ HTTP trên máy đã có image: xoá 1 pod mỗi dịch vụ lúc 2026-11-19T08:44:54Z, đo pod thay thế
+
+pod                                                   chờ máy  kéo image  khởi động  sẵn sàng  chạy job     tổng  node
+----------------------------------------------------------------------------------------------------------------------
+streamforge-account-64496567c5-258n7                       0s      14.7s        19s       10s         -      29s  i-0d5ff2fc563ee5802
+streamforge-catalog-5449d5dbb5-djgjd                       0s      10.5s        17s        2s         -      19s  i-0d5ff2fc563ee5802
+streamforge-live-c74b57647-rstpj                           0s       5.5s        13s        1s         -      14s  i-0d5ff2fc563ee5802
+streamforge-playback-7df4d5fbfb-rr77k                      0s       6.5s        15s       10s         -      25s  i-0d5ff2fc563ee5802
+streamforge-upload-7bb8dbfddc-4pk9w                        0s       9.5s        15s       12s         -      27s  i-0d5ff2fc563ee5802
+
+Job (tạo -> bắt đầu -> xong)
