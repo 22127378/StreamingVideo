@@ -1632,3 +1632,15 @@ a.thumb:hover {
     height: 480px;
   }
 }
+
+/* ---------- Trang chính: bộ lọc rỗng */
+.clear-filters {
+  align-self: end;
+}
+
+.empty-filtered {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin-top: 16px;
+}

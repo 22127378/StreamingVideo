@@ -26,15 +26,26 @@ const PERIODS = [
 ];
 
 const FILTER_KEY = 'sf-home-filters';
+const DEFAULT_FILTERS = { tier: '', sort: 'newest', period: '' };
 
 function savedFilters() {
   try {
     const saved = JSON.parse(localStorage.getItem(FILTER_KEY));
-    if (saved && typeof saved === 'object') return { tier: '', sort: 'newest', period: '', ...saved };
+    if (saved && typeof saved === 'object') return { ...DEFAULT_FILTERS, ...saved };
   } catch {
     /* bỏ qua */
   }
-  return { tier: '', sort: 'newest', period: '' };
+  return DEFAULT_FILTERS;
+}
+
+/** Mô tả các bộ lọc đang bật (sắp xếp không loại video nào nên không tính) */
+function activeFilters(filters) {
+  const parts = [];
+  const tier = TIERS.find((t) => t.value === filters.tier);
+  if (filters.tier && tier) parts.push(`gói ${tier.label}`);
+  const period = PERIODS.find((p) => p.value === filters.period);
+  if (filters.period && period) parts.push(`đăng trong ${period.label.toLowerCase()}`);
+  return parts;
 }
 
 /** Trang chính: chỉ video đã sẵn sàng trong database, lọc theo gói, sắp xếp, khoảng thời gian */
@@ -79,6 +90,9 @@ export default function HomePage() {
   }, [load, filters]);
 
   const set = (key) => (value) => setFilters((f) => ({ ...f, [key]: value }));
+  const active = activeFilters(filters);
+  const filtered = active.length > 0;
+  const clearFilters = () => setFilters((f) => ({ ...DEFAULT_FILTERS, sort: f.sort }));
 
   return (
     <main className="page">
@@ -122,17 +136,31 @@ export default function HomePage() {
               ))}
             </select>
           </label>
+          {filtered && (
+            <button className="secondary small clear-filters" onClick={clearFilters}>
+              Xoá bộ lọc
+            </button>
+          )}
         </div>
       </div>
 
       {error && <p className="notice error">Không tải được danh sách: {error}</p>}
-      <VideoList
-        videos={videos}
-        onLoadMore={() => load(nextToken)}
-        hasMore={Boolean(nextToken)}
-        loading={loading}
-        emptyText="Không có video nào khớp bộ lọc."
-      />
+      {!loading && !error && videos.length === 0 && filtered ? (
+        <div className="empty-filtered">
+          <p className="empty">Không có video nào {active.join(', ')}. Bộ lọc được nhớ từ lần trước bạn chọn.</p>
+          <button className="secondary small" onClick={clearFilters}>
+            Xoá bộ lọc, xem mọi video
+          </button>
+        </div>
+      ) : (
+        <VideoList
+          videos={videos}
+          onLoadMore={() => load(nextToken)}
+          hasMore={Boolean(nextToken)}
+          loading={loading}
+          emptyText="Chưa có video nào."
+        />
+      )}
     </main>
   );
 }
