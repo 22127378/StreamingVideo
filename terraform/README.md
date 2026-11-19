@@ -9,11 +9,11 @@ Hạ tầng AWS cho StreamForge, chia thành các layer áp dụng độc lập 
 | `messaging` | SQS `transcode` và DLQ (`maxReceiveCount` 3, visibility 300s) | `backend` | Gần 0 |
 | `identity` | IAM policy tối thiểu quyền cho API và worker, cộng hai dev role | `storage`, `messaging` | 0 |
 | `networking` | VPC 2 AZ, subnet public/private, 1 NAT gateway | `backend` | ~$33/tháng (NAT) |
-| `compute` | EKS Auto Mode, ECR, security group ALB chỉ mở cho CloudFront, Pod Identity cho API, worker và KEDA | `networking`, `identity` | ~$73/tháng (control plane) cộng node |
+| `compute` | EKS Auto Mode, ECR, security group ALB chỉ mở cho CloudFront, role IRSA cho worker và KEDA (OIDC provider của cụm) | `networking`, `identity` | ~$73/tháng (control plane) cộng node |
 | `auth` | Cognito user pool (tier LITE), app client cho SRP, group `premium` và `admin`. Mật khẩu tối thiểu 8 ký tự | `compute` | Miễn phí tới 10.000 user/tháng |
 | `database` | Aurora PostgreSQL 17 Serverless v2 (0 đến 4 ACU, tự dừng sau 10 phút rảnh), bắt buộc TLS, IAM auth cho user `streamforge_api` và `streamforge_worker`, mật khẩu master trong Secrets Manager | `networking`, `compute` | Gần 0 khi dừng; ~$0.12 mỗi ACU-giờ khi chạy, cộng storage |
-| `services` | EventBridge bus `<prefix>-events` và rule (VideoUploaded -> hàng đợi transcode, mọi sự kiện -> hàng đợi catalog), SQS `catalog-events` + DLQ, IAM role và Pod Identity cho account, upload, catalog, playback, quyền `rds-db:connect` cho user của từng service, quyền phát sự kiện cho worker | `compute`, `auth`, `database` | Gần 0 |
-| `observability` | SNS topic gửi email cảnh báo, bucket Loki, Pod Identity cho Loki, Alertmanager và Grafana, log CloudFront vào CloudWatch, alarm DLQ, queue bị kẹt và CloudFront 5xx (gửi qua EventBridge để email dễ đọc) | `compute`, `delivery` | Vài USD/tháng |
+| `services` | EventBridge bus `<prefix>-events` và rule (VideoUploaded -> hàng đợi transcode, mọi sự kiện -> hàng đợi catalog), SQS `catalog-events` + DLQ, IAM role IRSA cho account, upload, catalog, playback, live, quyền `rds-db:connect` cho user của từng service, quyền phát sự kiện cho worker | `compute`, `auth`, `database` | Gần 0 |
+| `observability` | SNS topic gửi email cảnh báo, bucket Loki, role IRSA cho Loki, Alertmanager và Grafana, log CloudFront vào CloudWatch, alarm DLQ, queue bị kẹt và CloudFront 5xx (gửi qua EventBridge để email dễ đọc) | `compute`, `delivery` | Vài USD/tháng |
 | `delivery` | Bucket `web` cho frontend và CloudFront: `/` là frontend, `/api/*` và `/grafana*` tới ALB, `/videos/*` là HLS từ bucket `processed` (CloudFront Function bỏ tiền tố `/videos`), cần signed cookie từ key group. Thumbnail để public. `PriceClass_200` để có edge ở châu Á | `compute` và Ingress của API | Gần 0, tính theo traffic |
 
 Ứng dụng chạy trên EKS được deploy bằng `k8s/deploy.sh` (xem mục "Deploy ứng dụng" bên dưới).

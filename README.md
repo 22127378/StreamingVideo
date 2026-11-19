@@ -93,7 +93,7 @@ In the cloud design, an S3 upload event reaches SQS through EventBridge. Locally
 | GitOps | ArgoCD App-of-Apps with a separate config repo |
 | CI/CD | GitHub Actions with GitHub OIDC, Argo Rollouts canary with Prometheus analysis |
 | Monitoring and scanning | Prometheus, Loki, Alloy, Grafana, CloudWatch alarms, Trivy, Checkov |
-| Security | Cognito, EKS Pod Identity, IAM database auth, CloudFront signed cookies, KMS |
+| Security | Cognito, IRSA, IAM database auth, CloudFront signed cookies, KMS |
 
 ## Infrastructure
 
@@ -107,14 +107,14 @@ Terraform lives in `terraform/`, split into layers that are applied separately. 
 | messaging | Built | Transcode SQS queue and DLQ |
 | identity | Built | IAM policies for the worker (and the old API's dev roles, to be removed) |
 | networking | Built | VPC across 2 AZs, public and private subnets, one NAT gateway |
-| compute | Built | EKS Auto Mode, ECR (one repository per service), Pod Identity for the worker and KEDA, ALB security group open to CloudFront only |
+| compute | Built | EKS Auto Mode, ECR (one repository per service), IRSA roles for the worker and KEDA, ALB security group open to CloudFront only |
 | delivery | Built | CloudFront: frontend bucket, HLS from the processed bucket via OAC behind a signed-cookie key group, `/api/*` and `/grafana*` to the ALB |
 | auth | Built | Cognito user pool, app client and the `premium` and `admin` groups |
 | database | Built | Aurora PostgreSQL 17 Serverless v2 (pauses after 10 idle minutes), master secret in Secrets Manager |
-| services | Built | EventBridge bus and rules, catalog event queue and DLQ, one IAM role and Pod Identity per service (live: IVS channels), database connect rights per service user |
-| observability | Built | SNS alert topic, Loki bucket, Pod Identity for Loki, Alertmanager and Grafana, CloudWatch alarms on the DLQ, stuck queue and CloudFront 5xx |
+| services | Built | EventBridge bus and rules, catalog event queue and DLQ, one IRSA role per service (live: IVS channels), database connect rights per service user |
+| observability | Built | SNS alert topic, Loki bucket, IRSA roles for Loki, Alertmanager and Grafana, CloudWatch alarms on the DLQ, stuck queue and CloudFront 5xx |
 
-The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA running the worker as a ScaledJob (one Job per video, scaled to zero, with a placeholder pod keeping a warm node to avoid cold starts), migration Jobs for the database, and `k8s/deploy.sh` for the one-time cluster bootstrap. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and EKS Pod Identity replaces IRSA: each service account maps to its own least-privilege IAM role through a Pod Identity association, with no OIDC provider for the cluster and no role annotations on the service accounts.
+The app runs on EKS from `k8s/`: NodePools for an on-demand API pool and a Spot transcode pool, KEDA running the worker as a ScaledJob (one Job per video, scaled to zero, with a placeholder pod keeping a warm node to avoid cold starts), migration Jobs for the database, and `k8s/deploy.sh` for the one-time cluster bootstrap. Compared with the original plan, EKS Auto Mode replaces self-managed node groups and the cluster autoscaler, and pods get AWS access through IRSA: each service account carries an `eks.amazonaws.com/role-arn` annotation for its own least-privilege IAM role, and the role trusts only that service account through the cluster OIDC provider (`sub` and `aud` conditions). The OIDC provider belongs to one cluster, so after rebuilding the cluster the layers with pod roles (`compute`, `services`, `observability`, `database`) are applied again to point their trust at the new provider.
 
 Transcode jobs come from the upload service's `VideoUploaded` event, not from S3 notifications, so each confirmed upload is transcoded exactly once.
 
@@ -184,7 +184,7 @@ Locally MediaMTX takes IVS's place: OBS publishes to `rtmp://localhost:1935/live
 | Concern | Approach |
 | --- | --- |
 | CI/CD authentication | GitHub OIDC, so CI holds no static AWS keys; the role only pushes to ECR from `main` |
-| Pod permissions | EKS Pod Identity (not IRSA), one least-privilege IAM role per service |
+| Pod permissions | IRSA (OIDC of the cluster), one least-privilege IAM role per service, trust limited to one service account |
 | User sign-in | Cognito with SRP, so the password is never sent as plain text |
 | Database access | IAM auth tokens instead of stored passwords, TLS required |
 | Container scanning | Trivy in CI blocks images with known CVEs |
@@ -197,7 +197,7 @@ Locally MediaMTX takes IVS's place: OBS publishes to `rtmp://localhost:1935/live
 ```
 GitHub Actions (OIDC) ──▶ AWS STS ──▶ Temporary Credentials
                                           │
-EKS Pod (Pod Identity) ─▶ AWS STS ──▶ Per-service IAM Role
+EKS Pod (IRSA token) ─▶ AWS STS ──▶ Per-service IAM Role
                                           │
 User ──▶ CloudFront (Signed Cookie) ──▶ ALB ──▶ EKS
               │

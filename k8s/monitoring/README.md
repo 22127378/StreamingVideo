@@ -20,7 +20,7 @@ Grafana (https://<cloudfront>/grafana) ─ đọc Prometheus, Loki và CloudWatc
 ## Cài đặt
 
 ```bash
-terraform -chdir=terraform/layers/observability apply   # bucket Loki, SNS, Pod Identity, CloudWatch
+terraform -chdir=terraform/layers/observability apply   # bucket Loki, SNS, role IRSA, CloudWatch
 ./k8s/monitoring/install.sh
 ```
 
