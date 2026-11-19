@@ -62,13 +62,17 @@ spec:
             description: 'Trong Grafana Explore (Loki): {namespace="streamforge", event="transcode_finished"} | json'
 
         - alert: StreamForgeWorkerUnavailable
-          # Job worker (ScaledJob) đang chạy, kể cả Job đang chờ message
-          expr: (sum(kube_job_status_active{namespace="streamforge", job_name=~"streamforge-worker-.+"}) or vector(0)) < 1
-          for: 15m
+          # Worker là ScaledJob về 0 khi rảnh, nên "không có Job" chỉ là lỗi khi có video đang chờ.
+          # Độ dài queue lấy từ KEDA (trigger aws-sqs-queue; scaleOnInFlight nên gồm cả message đang xử lý).
+          expr: |
+            max(keda_scaler_metrics_value{namespace="streamforge", metric=~".*aws-sqs.*"}) > 0
+              and on()
+            (sum(kube_job_status_active{namespace="streamforge", job_name=~"streamforge-worker-.+"}) or vector(0)) < 1
+          for: 10m
           labels: { severity: warning }
           annotations:
-            summary: Không có worker transcode nào sẵn sàng trong 15 phút (mức provisioned là 1)
-            description: Thường do không xin được máy Spot. Xem kubectl get nodeclaims và sự kiện Kubernetes trong Loki.
+            summary: "Có {{ $value | humanize }} video chờ trong queue nhưng không có Job worker nào chạy trong 10 phút"
+            description: Thường do không xin được máy Spot hoặc KEDA không tạo được Job. Xem kubectl get nodeclaims, kubectl -n streamforge describe scaledjob streamforge-worker và sự kiện Kubernetes trong Loki.
 
     - name: streamforge-platform
       rules:

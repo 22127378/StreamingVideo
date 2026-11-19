@@ -706,7 +706,7 @@
     {
       "type": "timeseries",
       "title": "Worker",
-      "description": "Mức provisioned là 1 worker; KEDA tăng tới 4 khi queue dài",
+      "description": "Worker là KEDA ScaledJob: 0 Job khi rảnh, mỗi video một Job, tối đa 4",
       "id": 13,
       "datasource": {
         "type": "prometheus",
@@ -814,7 +814,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "keda_scaler_metrics_value{scaledObject=\"streamforge-worker\"}",
+          "expr": "max(keda_scaler_metrics_value{namespace=\"streamforge\",metric=~\".*aws-sqs.*\"})",
           "legendFormat": "queue length"
         },
         {
