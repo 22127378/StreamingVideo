@@ -35,6 +35,18 @@ variable "deletion_protection" {
   default = true
 }
 
+variable "final_snapshot_identifier" {
+  description = "Name of the snapshot taken when the cluster is destroyed. Must not exist yet, so use a new name each time (for example streamforge-dev-final-20261119)"
+  type        = string
+  default     = null
+}
+
+variable "restore_snapshot_identifier" {
+  description = "Create the cluster from this snapshot (for example streamforge-dev-final, taken when the layer was destroyed) instead of an empty database"
+  type        = string
+  default     = null
+}
+
 data "aws_vpc" "this" {
   tags = { Name = local.name_prefix }
 }
@@ -47,8 +59,17 @@ data "aws_subnets" "private" {
   tags = { Tier = "private" }
 }
 
+# Cụm EKS có thể đang tắt (k8s/teardown.sh): khi đó bỏ qua rule security group và Pod Identity của
+# migration, apply lại layer này sau khi dựng cụm để tạo chúng.
+data "aws_eks_clusters" "all" {}
+
+locals {
+  cluster_exists = contains(data.aws_eks_clusters.all.names, local.cluster_name)
+}
+
 data "aws_eks_cluster" "this" {
-  name = local.cluster_name
+  count = local.cluster_exists ? 1 : 0
+  name  = local.cluster_name
 }
 
 resource "aws_db_subnet_group" "this" {
@@ -64,8 +85,9 @@ resource "aws_security_group" "db" {
 
 # Pod trên EKS Auto Mode dùng security group của cluster
 resource "aws_vpc_security_group_ingress_rule" "db_from_eks" {
+  count                        = local.cluster_exists ? 1 : 0
   security_group_id            = aws_security_group.db.id
-  referenced_security_group_id = data.aws_eks_cluster.this.vpc_config[0].cluster_security_group_id
+  referenced_security_group_id = data.aws_eks_cluster.this[0].vpc_config[0].cluster_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
@@ -107,16 +129,24 @@ resource "aws_rds_cluster" "this" {
   vpc_security_group_ids              = [aws_security_group.db.id]
   db_cluster_parameter_group_name     = aws_rds_cluster_parameter_group.this.name
 
-  backup_retention_period         = 7
-  preferred_backup_window         = "18:00-19:00" # 01:00-02:00 giờ Việt Nam
-  copy_tags_to_snapshot           = true
-  deletion_protection             = var.deletion_protection
-  skip_final_snapshot             = false
-  final_snapshot_identifier       = "${local.name_prefix}-final"
+  backup_retention_period = 7
+  preferred_backup_window = "18:00-19:00" # 01:00-02:00 giờ Việt Nam
+  copy_tags_to_snapshot   = true
+  deletion_protection     = var.deletion_protection
+  skip_final_snapshot     = false
+  # Tên bản sao cuối phải chưa tồn tại: mỗi lần xoá đặt một tên mới (xem đầu k8s/teardown.sh)
+  final_snapshot_identifier = coalesce(var.final_snapshot_identifier, "${local.name_prefix}-final")
+  # Dựng lại từ bản sao cuối: terraform apply -var restore_snapshot_identifier=<tên bản sao>
+  snapshot_identifier             = var.restore_snapshot_identifier
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
   # Log group có thời hạn lưu phải có trước, nếu không RDS tự tạo log group lưu vĩnh viễn
   depends_on = [aws_cloudwatch_log_group.postgresql]
+
+  lifecycle {
+    # Chỉ dùng lúc tạo; bỏ biến ở lần apply sau không được làm Terraform tạo lại cluster
+    ignore_changes = [snapshot_identifier]
+  }
 
   serverlessv2_scaling_configuration {
     min_capacity             = var.min_capacity
@@ -181,6 +211,7 @@ resource "aws_iam_role_policy" "migrator" {
 }
 
 resource "aws_eks_pod_identity_association" "migrator" {
+  count           = local.cluster_exists ? 1 : 0
   cluster_name    = local.cluster_name
   namespace       = "streamforge"
   service_account = "streamforge-db-migrator"

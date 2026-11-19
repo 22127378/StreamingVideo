@@ -7,9 +7,19 @@
 #
 #   ./k8s/teardown.sh
 #
-# Dựng lại:
+# Muốn về gần $0 thì xoá thêm database (Aurora, chụp bản sao cuối trước khi xoá) và networking. Tên bản sao
+# phải chưa tồn tại, nên đặt theo ngày; apply trước để tên mới nằm trong state rồi mới destroy:
+#   SNAP=streamforge-dev-final-$(date +%Y%m%d)
+#   terraform -chdir=terraform/layers/database apply   -var deletion_protection=false -var final_snapshot_identifier=$SNAP
+#   terraform -chdir=terraform/layers/database destroy -var deletion_protection=false -var final_snapshot_identifier=$SNAP
+#   terraform -chdir=terraform/layers/networking destroy
+# Bản sao gần nhất: aws rds describe-db-cluster-snapshots --snapshot-type manual --query 'DBClusterSnapshots[].[DBClusterSnapshotIdentifier,SnapshotCreateTime]' 
+#
+# Dựng lại (nếu đã xoá database và networking thì làm hai dòng đầu, không thì bỏ qua):
+#   terraform -chdir=terraform/layers/networking apply
+#   terraform -chdir=terraform/layers/database apply -var restore_snapshot_identifier=<bản sao gần nhất>
 #   terraform -chdir=terraform/layers/compute apply
-#   terraform -chdir=terraform/layers/database apply      # rule security group từ cụm vào Aurora
+#   terraform -chdir=terraform/layers/database apply      # rule security group từ cụm vào Aurora, Pod Identity migration
 #   terraform -chdir=terraform/layers/services apply      # Pod Identity của service, quyền của worker
 #   terraform -chdir=terraform/layers/observability apply # Pod Identity của Loki, Alertmanager, Grafana
 #   ./k8s/deploy.sh && ./k8s/argocd/install.sh            # ArgoCD cài KEDA, Argo Rollouts và app
@@ -47,7 +57,7 @@ fi
 
 log "Detaching cross-layer references to the cluster"
 # Rule security group Aurora <- cluster: không gỡ thì không xoá được security group của cụm
-terraform -chdir="$TF/database" destroy -auto-approve -target=aws_vpc_security_group_ingress_rule.db_from_eks
+terraform -chdir="$TF/database" destroy -auto-approve -target='aws_vpc_security_group_ingress_rule.db_from_eks[0]'
 # Policy gắn vào role worker (role thuộc layer compute)
 terraform -chdir="$TF/services" destroy -auto-approve -target=aws_iam_role_policy.worker_events
 
