@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createChannel, getStudio, resetStreamKey, updateStudio } from '../api.js';
+import CameraBroadcast from '../components/CameraBroadcast.jsx';
 import { href } from '../router.js';
+
+// Phát từ trình duyệt chỉ có với Amazon IVS. Khi chạy trên máy (MediaMTX) thì dùng OBS.
+const isIvs = (ingestEndpoint) => /\.live-video\.net/.test(ingestEndpoint || '');
 
 function CopyField({ label, value, secret }) {
   const [shown, setShown] = useState(!secret);
@@ -50,6 +54,15 @@ export default function StudioPage({ user, onLogin }) {
       })
       .catch((err) => setState(err.status === 404 ? 'new' : (setMessage({ type: 'error', text: err.message }), 'error')));
   }, [user]);
+
+  // Trạng thái "đang phát" lấy từ IVS (live-service giữ kết quả vài giây), nên hỏi lại sau một lúc
+  const refreshSoon = () => {
+    setTimeout(() => {
+      getStudio()
+        .then(({ data }) => setStudio(data))
+        .catch(() => {});
+    }, 8000);
+  };
 
   const run = async (action, success) => {
     setBusy(true);
@@ -113,6 +126,18 @@ export default function StudioPage({ user, onLogin }) {
 
       {studio && (
         <div className="studio-grid">
+          {isIvs(studio.ingestEndpoint) ? (
+            <CameraBroadcast ingestEndpoint={studio.ingestEndpoint} streamKey={studio.streamKey} onLiveChange={refreshSoon} />
+          ) : (
+            <section className="card studio-card camera-card">
+              <h2>Phát bằng camera</h2>
+              <p className="muted">
+                Chỉ có khi chạy trên AWS (Amazon IVS). Khi chạy trên máy với MediaMTX, dùng OBS: thêm nguồn "Video Capture
+                Device" để lấy camera.
+              </p>
+            </section>
+          )}
+
           <section className="card studio-card">
             <h2>Trạng thái</h2>
             {studio.isLive ? (
@@ -138,10 +163,11 @@ export default function StudioPage({ user, onLogin }) {
           </section>
 
           <section className="card studio-card">
-            <h2>Cài đặt OBS</h2>
+            <h2>Hoặc phát bằng OBS</h2>
             <p className="muted">
-              OBS → Settings → Stream → Service: <strong>Custom...</strong>, rồi dán hai giá trị dưới đây. Không chia sẻ khoá
-              stream: ai có khoá đều phát được lên kênh của bạn.
+              OBS → Settings → Stream → Service: <strong>Custom...</strong>, rồi dán hai giá trị dưới đây. Muốn dùng camera
+              trong OBS thì thêm nguồn "Video Capture Device". Không chia sẻ khoá stream: ai có khoá đều phát được lên kênh
+              của bạn.
             </p>
             <CopyField label="Server" value={studio.ingestEndpoint} />
             <CopyField label="Stream key" value={studio.streamKey} secret />
