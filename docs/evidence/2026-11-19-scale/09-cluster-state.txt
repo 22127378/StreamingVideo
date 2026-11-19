@@ -1,0 +1,95 @@
+# Trạng thái cụm sau các bài test (2026-11-19T05:14:01Z)
+
+## Nodes
+NAME                  STATUS   ROLES    AGE   VERSION               POOL        CAPACITY-TYPE   INSTANCE-TYPE
+i-017f2d60aebff0f93   Ready    <none>   73m   v1.36.5-eks-577a51e   app         on-demand       t3a.medium
+i-0c0567ae07f9bc38e   Ready    <none>   42m   v1.36.5-eks-577a51e   app         on-demand       t3a.medium
+i-0d26ead2216880bd9   Ready    <none>   19m   v1.36.5-eks-577a51e   transcode   spot            c7i-flex.large
+
+## Pods streamforge
+NAME                                                 READY   STATUS    RESTARTS   AGE   IP             NODE                  NOMINATED NODE   READINESS GATES
+streamforge-account-d8d745b68-45rtf                  1/1     Running   0          71m   10.20.17.246   i-017f2d60aebff0f93   <none>           <none>
+streamforge-account-d8d745b68-fb5ws                  1/1     Running   0          71m   10.20.17.245   i-017f2d60aebff0f93   <none>           <none>
+streamforge-catalog-58d79c745d-9qnph                 1/1     Running   0          70m   10.20.17.248   i-017f2d60aebff0f93   <none>           <none>
+streamforge-catalog-58d79c745d-z94v7                 1/1     Running   0          70m   10.20.17.247   i-017f2d60aebff0f93   <none>           <none>
+streamforge-live-6f8984cc48-4zctf                    1/1     Running   0          70m   10.20.17.249   i-017f2d60aebff0f93   <none>           <none>
+streamforge-live-6f8984cc48-5htbq                    1/1     Running   0          70m   10.20.17.250   i-017f2d60aebff0f93   <none>           <none>
+streamforge-playback-7f7dbc8c99-5s7vl                1/1     Running   0          70m   10.20.17.251   i-017f2d60aebff0f93   <none>           <none>
+streamforge-playback-7f7dbc8c99-lmftx                1/1     Running   0          70m   10.20.17.252   i-017f2d60aebff0f93   <none>           <none>
+streamforge-transcode-placeholder-7d9dcd69f9-28mt7   1/1     Running   0          19m   10.20.22.176   i-0d26ead2216880bd9   <none>           <none>
+streamforge-upload-75489d5d6b-s6lnm                  1/1     Running   0          70m   10.20.17.254   i-017f2d60aebff0f93   <none>           <none>
+streamforge-upload-75489d5d6b-sj75l                  1/1     Running   0          70m   10.20.17.253   i-017f2d60aebff0f93   <none>           <none>
+
+## Rollouts, ScaledJob, ScaledObject
+NAME                                       DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+rollout.argoproj.io/streamforge-account    2         2         2            2           71m
+rollout.argoproj.io/streamforge-catalog    2         2         2            2           71m
+rollout.argoproj.io/streamforge-live       2         2         2            2           71m
+rollout.argoproj.io/streamforge-playback   2         2         2            2           70m
+rollout.argoproj.io/streamforge-upload     2         2         2            2           70m
+
+NAME                                   MIN   MAX   READY   ACTIVE   PAUSED   TRIGGERS        AUTHENTICATIONS   AGE
+scaledjob.keda.sh/streamforge-worker   0     4     True    False    False    aws-sqs-queue   streamforge-aws   70m
+
+NAME                                                     SCALETARGETKIND      SCALETARGETNAME                     MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS   AUTHENTICATIONS   AGE
+scaledobject.keda.sh/streamforge-transcode-placeholder   apps/v1.Deployment   streamforge-transcode-placeholder   0     4     True    True     False      False    cron                         70m
+
+## HPA (không có HPA cho dịch vụ HTTP)
+NAME                                         REFERENCE                                      TARGETS     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-streamforge-transcode-placeholder   Deployment/streamforge-transcode-placeholder   1/1 (avg)   1         4         1          70m
+
+## Jobs worker đã chạy
+NAME                          STATUS     COMPLETIONS   DURATION   AGE
+streamforge-migrate-catalog   Complete   1/1           60s        50m
+streamforge-migrate-live      Complete   1/1           59s        50m
+streamforge-migrate-upload    Complete   1/1           58s        50m
+streamforge-worker-cnzbm      Complete   1/1           64s        17m
+streamforge-worker-v77lz      Complete   1/1           39s        17m
+streamforge-worker-v9zc8      Complete   1/1           55s        18m
+streamforge-worker-xvxmr      Complete   1/1           77s        18m
+streamforge-worker-zpvlr      Complete   1/1           65s        17m
+
+## IRSA: ServiceAccount và role
+NAME                      ROLE
+default                   <none>
+streamforge-account       arn:aws:iam::728384804953:role/streamforge-dev-account-pod
+streamforge-catalog       arn:aws:iam::728384804953:role/streamforge-dev-catalog-pod
+streamforge-db-migrator   arn:aws:iam::728384804953:role/streamforge-dev-db-migrator-pod
+streamforge-live          arn:aws:iam::728384804953:role/streamforge-dev-live-pod
+streamforge-playback      arn:aws:iam::728384804953:role/streamforge-dev-playback-pod
+streamforge-upload        arn:aws:iam::728384804953:role/streamforge-dev-upload-pod
+streamforge-worker        arn:aws:iam::728384804953:role/streamforge-dev-worker-pod
+NAME           ROLE
+loki           arn:aws:iam::728384804953:role/streamforge-dev-loki-pod
+alertmanager   arn:aws:iam::728384804953:role/streamforge-dev-alertmanager-pod
+grafana        arn:aws:iam::728384804953:role/streamforge-dev-grafana-pod
+NAME            ROLE
+keda-operator   arn:aws:iam::728384804953:role/streamforge-dev-keda-pod
+
+## Một log worker (1 video/1 Job)
+No resources found in streamforge namespace.
+error: expected 'logs [-f] [-p] (POD | TYPE/NAME) [-c CONTAINER]'.
+POD or TYPE/NAME is a required argument for the logs command
+See 'kubectl logs -h' for help and examples
+
+## Sự kiện scale (KEDA/Karpenter/Scheduler)
+20m         Warning   FailedScheduling         pod/streamforge-transcode-placeholder-7d9dcd69f9-28mt7    0/5 nodes are available: 2 Insufficient memory, 2 node(s) didn't match Pod's node affinity/sele
+20m         Warning   FailedScheduling         pod/streamforge-transcode-placeholder-7d9dcd69f9-28mt7    0/6 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient memory, 2 node(s) d
+19m         Normal    Completed                job/streamforge-worker-8kfn8                              Job completed
+19m         Normal    SuccessfulCreate         job/streamforge-worker-zpbxx                              Created pod: streamforge-worker-zpbxx-kn45l
+19m         Normal    Completed                job/streamforge-worker-95klk                              Job completed
+19m         Normal    Completed                job/streamforge-worker-z8n8d                              Job completed
+19m         Normal    Completed                job/streamforge-worker-dpd5m                              Job completed
+19m         Normal    SuccessfulCreate         job/streamforge-worker-v9zc8                              Created pod: streamforge-worker-v9zc8-5vnc8
+19m         Normal    SuccessfulCreate         job/streamforge-worker-zlgsj                              Created pod: streamforge-worker-zlgsj-f2b8l
+19m         Normal    SuccessfulCreate         job/streamforge-worker-xvxmr                              Created pod: streamforge-worker-xvxmr-5qds2
+18m         Normal    Completed                job/streamforge-worker-zpbxx                              Job completed
+18m         Normal    Completed                job/streamforge-worker-zlgsj                              Job completed
+18m         Normal    Completed                job/streamforge-worker-v9zc8                              Job completed
+18m         Normal    SuccessfulCreate         job/streamforge-worker-zpvlr                              Created pod: streamforge-worker-zpvlr-sb8rp
+18m         Normal    SuccessfulCreate         job/streamforge-worker-v77lz                              Created pod: streamforge-worker-v77lz-bcrb7
+18m         Normal    SuccessfulCreate         job/streamforge-worker-cnzbm                              Created pod: streamforge-worker-cnzbm-bj4kv
+17m         Normal    Completed                job/streamforge-worker-xvxmr                              Job completed
+17m         Normal    Completed                job/streamforge-worker-v77lz                              Job completed
+17m         Normal    Completed                job/streamforge-worker-cnzbm                              Job completed
+17m         Normal    Completed                job/streamforge-worker-zpvlr                              Job completed
