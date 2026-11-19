@@ -64,7 +64,7 @@ prometheus:
 alertmanager:
   serviceAccount:
     create: true
-    # Khớp aws_eks_pod_identity_association "alertmanager" (terraform/layers/observability): được sns:Publish
+    # Khớp trust IRSA của role "alertmanager" (terraform/layers/observability): được sns:Publish. install.sh thêm annotation role-arn
     name: alertmanager
   alertmanagerSpec:
     resources:
@@ -75,7 +75,7 @@ alertmanager:
 grafana:
   serviceAccount:
     create: true
-    # Khớp aws_eks_pod_identity_association "grafana": đọc CloudWatch (SQS, CloudFront, audit EKS)
+    # Khớp trust IRSA của role "grafana": đọc CloudWatch (SQS, CloudFront, audit EKS). install.sh thêm annotation role-arn
     name: grafana
   admin:
     existingSecret: grafana-admin
@@ -112,6 +112,6 @@ grafana:
       uid: cloudwatch
       type: cloudwatch
       jsonData:
-        # Dùng credentials của pod (EKS Pod Identity)
+        # Dùng credentials của pod (IRSA)
         authType: default
         defaultRegion: us-east-1

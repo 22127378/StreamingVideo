@@ -1,6 +1,6 @@
 # IAM policy theo nguyên tắc quyền tối thiểu cho API và worker.
-# Từ thời API gộp: trên EKS các service dùng role riêng qua EKS Pod Identity (layer compute và
-# services), không dùng IRSA. Module này chỉ còn dev role (create_dev_roles) để chạy API/worker
+# Từ thời API gộp: trên EKS các service dùng role riêng qua IRSA (layer compute, services,
+# observability, database). Module này chỉ còn dev role (create_dev_roles) để chạy API/worker
 # cũ trên máy với đúng các quyền này; sẽ gỡ cùng bảng DynamoDB cũ.
 
 data "aws_caller_identity" "current" {}

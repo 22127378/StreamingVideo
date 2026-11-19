@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cài bộ giám sát vào cụm: kube-prometheus-stack (Prometheus, Alertmanager, Grafana), Loki, Alloy.
 #
-# Yêu cầu: terraform/layers/observability đã apply (bucket Loki, SNS, Pod Identity), k8s/deploy.sh đã chạy
+# Yêu cầu: terraform/layers/observability đã apply (bucket Loki, SNS, role IRSA), k8s/deploy.sh đã chạy
 # (namespace streamforge, KEDA). Chạy lại an toàn.
 #   ./k8s/monitoring/install.sh
 set -euo pipefail
@@ -23,6 +23,9 @@ SITE_URL=$(tf_out delivery site_url)
 CLOUDFRONT_ID=$(tf_out delivery distribution_id)
 ALB_SG=$(tf_out compute alb_security_group_id)
 ACCOUNT_ID=$(cut -d: -f5 <<<"$SNS_TOPIC")
+# Role IRSA của Loki, Alertmanager và Grafana (layer observability)
+MON_ROLES=$(terraform -chdir="$TF/observability" output -json monitoring_role_arns)
+role_of() { jq -r --arg k "$1" '.[$k]' <<<"$MON_ROLES"; }
 DOMAIN=${SITE_URL#https://}
 echo "loki=$LOKI_BUCKET grafana=$SITE_URL/grafana"
 
@@ -40,11 +43,14 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
 helm repo update prometheus-community grafana >/dev/null
 
-# Alertmanager gửi mọi cảnh báo tới SNS (cùng topic với CloudWatch Alarm), ký request bằng Pod Identity
+# Alertmanager gửi mọi cảnh báo tới SNS (cùng topic với CloudWatch Alarm), ký request bằng role IRSA
 ALERTMANAGER_VALUES=$(mktemp)
 trap 'rm -f "$ALERTMANAGER_VALUES"' EXIT
 cat > "$ALERTMANAGER_VALUES" <<EOF
 alertmanager:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: $(role_of alertmanager)
   config:
     route:
       # Mặc định không gửi đi (cảnh báo có sẵn của kube-prometheus-stack chỉ xem trong Grafana)
@@ -70,6 +76,9 @@ alertmanager:
               {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
               {{ end }}
 grafana:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: $(role_of grafana)
   grafana.ini:
     server:
       domain: $DOMAIN
@@ -88,6 +97,7 @@ helm upgrade --install loki grafana/loki --version "$LOKI_VERSION" --namespace "
   --set "loki.storage.bucketNames.chunks=$LOKI_BUCKET" \
   --set "loki.storage.bucketNames.ruler=$LOKI_BUCKET" \
   --set "loki.storage.bucketNames.admin=$LOKI_BUCKET" \
+  --set-string "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=$(role_of loki)" \
   --wait --timeout 10m
 
 log "Alloy $ALLOY_VERSION"

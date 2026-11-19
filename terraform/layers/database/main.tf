@@ -2,7 +2,7 @@
 #
 # - Nằm trong subnet private, chỉ nhận kết nối 5432 từ pod trong cụm EKS (security group của cluster).
 # - Service không có mật khẩu DB: catalog và upload kết nối bằng IAM database authentication (token 15 phút
-#   sinh từ credentials Pod Identity). Mỗi service một user và một schema riêng (streamforge_catalog/catalog,
+#   sinh từ credentials IRSA). Mỗi service một user và một schema riêng (streamforge_catalog/catalog,
 #   streamforge_upload/upload); quyền rds-db:connect nằm ở layer services. Worker không dùng database.
 # - Mật khẩu master do RDS quản lý trong Secrets Manager; chỉ Job migration (k8s/db/) dùng nó để tạo schema
 #   và user DB.
@@ -59,7 +59,7 @@ data "aws_subnets" "private" {
   tags = { Tier = "private" }
 }
 
-# Cụm EKS có thể đang tắt (k8s/teardown.sh): khi đó bỏ qua rule security group và Pod Identity của
+# Cụm EKS có thể đang tắt (k8s/teardown.sh): khi đó bỏ qua rule security group và role IRSA của
 # migration, apply lại layer này sau khi dựng cụm để tạo chúng.
 data "aws_eks_clusters" "all" {}
 
@@ -176,12 +176,30 @@ resource "aws_cloudwatch_log_group" "postgresql" {
 # Quyền rds-db:connect của từng service (user streamforge_catalog, streamforge_upload) nằm ở layer services.
 
 # ---------------- Job migration (k8s/db/migrate-job.yaml): mật khẩu master + đọc DynamoDB cũ để chép dữ liệu
-data "aws_iam_policy_document" "pod_identity_trust" {
+# Role IRSA gắn với OIDC provider của cụm, nên chỉ tồn tại khi cụm đang chạy (apply lại layer sau khi dựng cụm).
+locals {
+  oidc_host = local.cluster_exists ? replace(data.aws_eks_cluster.this[0].identity[0].oidc[0].issuer, "https://", "") : ""
+  oidc_arn  = "arn:aws:iam::${local.account_id}:oidc-provider/${local.oidc_host}"
+}
+
+data "aws_iam_policy_document" "irsa_trust" {
+  count = local.cluster_exists ? 1 : 0
+
   statement {
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
+      type        = "Federated"
+      identifiers = [local.oidc_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:sub"
+      values   = ["system:serviceaccount:streamforge:streamforge-db-migrator"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:aud"
+      values   = ["sts.amazonaws.com"]
     }
   }
 }
@@ -200,22 +218,21 @@ data "aws_iam_policy_document" "migrator" {
 }
 
 resource "aws_iam_role" "migrator" {
+  count              = local.cluster_exists ? 1 : 0
   name               = "${local.name_prefix}-db-migrator-pod"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust[0].json
 }
 
 resource "aws_iam_role_policy" "migrator" {
+  count  = local.cluster_exists ? 1 : 0
   name   = "db-migrator"
-  role   = aws_iam_role.migrator.name
+  role   = aws_iam_role.migrator[0].name
   policy = data.aws_iam_policy_document.migrator.json
 }
 
-resource "aws_eks_pod_identity_association" "migrator" {
-  count           = local.cluster_exists ? 1 : 0
-  cluster_name    = local.cluster_name
-  namespace       = "streamforge"
-  service_account = "streamforge-db-migrator"
-  role_arn        = aws_iam_role.migrator.arn
+output "migrator_role_arn" {
+  description = "Role IRSA của Job migration (rỗng khi cụm EKS đang tắt)"
+  value       = one(aws_iam_role.migrator[*].arn)
 }
 
 output "endpoint" {

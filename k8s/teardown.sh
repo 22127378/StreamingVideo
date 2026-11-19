@@ -19,9 +19,9 @@
 #   terraform -chdir=terraform/layers/networking apply
 #   terraform -chdir=terraform/layers/database apply -var restore_snapshot_identifier=<bản sao gần nhất>
 #   terraform -chdir=terraform/layers/compute apply
-#   terraform -chdir=terraform/layers/database apply      # rule security group từ cụm vào Aurora, Pod Identity migration
-#   terraform -chdir=terraform/layers/services apply      # Pod Identity của service, quyền của worker
-#   terraform -chdir=terraform/layers/observability apply # Pod Identity của Loki, Alertmanager, Grafana
+#   terraform -chdir=terraform/layers/database apply      # rule security group từ cụm vào Aurora, role IRSA của migration
+#   terraform -chdir=terraform/layers/services apply      # role IRSA của service (trust theo OIDC của cụm mới), quyền của worker
+#   terraform -chdir=terraform/layers/observability apply # role IRSA của Loki, Alertmanager, Grafana (trust theo OIDC của cụm mới)
 #   ./k8s/deploy.sh && ./k8s/argocd/install.sh            # ArgoCD cài KEDA, Argo Rollouts và app
 #   ./k8s/monitoring/install.sh
 #   # ALB mới có DNS mới: cập nhật api_alb_dns_name trong terraform/layers/delivery/terraform.tfvars

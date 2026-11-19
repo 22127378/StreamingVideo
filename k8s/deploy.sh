@@ -41,6 +41,7 @@ BASE_REF=${BASE_REF:-$(git -C "$ROOT" rev-parse HEAD)}
 CODE_REPO_URL=${CODE_REPO_URL:-https://github.com/22127378/StreamingVideo}
 
 tf_out() { terraform -chdir="$TF/$1" output -raw "$2"; }
+tf_json() { terraform -chdir="$TF/$1" output -json "$2"; }
 log() { printf '\n==> %s\n' "$*"; }
 
 log "Reading Terraform outputs"
@@ -57,6 +58,10 @@ DB_HOST=$(tf_out database endpoint)
 DB_NAME=$(tf_out database database)
 DB_MASTER_SECRET_ARN=$(tf_out database master_secret_arn)
 QUEUE_URL=$(tf_out messaging transcode_queue_url)
+# Role IRSA: annotation eks.amazonaws.com/role-arn trên ServiceAccount (apply lại các layer này sau mỗi lần dựng cụm)
+SERVICE_ROLES=$(tf_json services service_role_arns)
+POD_ROLES=$(tf_json compute pod_role_arns)
+MIGRATOR_ROLE=$(tf_out database migrator_role_arn)
 # Sự kiện giữa các service (layer services)
 EVENT_BUS_NAME=$(tf_out services event_bus_name)
 CATALOG_EVENTS_QUEUE_URL=$(tf_out services catalog_events_queue_url)
@@ -124,7 +129,8 @@ else
   helm repo update kedacore >/dev/null
   helm upgrade --install keda kedacore/keda --version "$KEDA_VERSION" \
     --namespace keda --create-namespace --wait --timeout 10m \
-    --set podIdentity.aws.irsa.enabled=false \
+    --set podIdentity.aws.irsa.enabled=true \
+    --set "podIdentity.aws.irsa.roleArn=$(jq -r .keda <<<"$POD_ROLES")" \
     --set prometheus.operator.enabled=true
 fi
 fi
@@ -189,6 +195,26 @@ for svc in "${SERVICES[@]}" worker; do
     newTag: $TAG
 "
 done
+# Annotation role IRSA cho ServiceAccount (strategic merge nên giữ các annotation khác)
+sa_patches=""
+add_sa_patch() { # tên ServiceAccount, ARN role, [annotation thêm dạng "key: value"]
+  sa_patches+="  - target:
+      kind: ServiceAccount
+      name: $1
+    patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: $1
+        annotations:
+          eks.amazonaws.com/role-arn: $2
+${3:+          $3
+}"
+}
+for svc in "${SERVICES[@]}"; do add_sa_patch "streamforge-$svc" "$(jq -r --arg k "$svc" '.[$k]' <<<"$SERVICE_ROLES")"; done
+add_sa_patch streamforge-worker "$(jq -r .worker <<<"$POD_ROLES")"
+add_sa_patch streamforge-db-migrator "$MIGRATOR_ROLE" 'argocd.argoproj.io/sync-wave: "-2"'
+
 cat > "$GITOPS/kustomization.yaml" <<EOF
 # Môi trường dev của StreamForge. ArgoCD (apps/streamforge.yaml) đồng bộ thư mục này lên cụm.
 # - Manifest gốc lấy từ repo code, ghim theo commit (ref) cùng commit với tag image bên dưới.
@@ -251,14 +277,6 @@ patches:
         path: /metadata/annotations
         value:
           argocd.argoproj.io/sync-wave: "-3"
-  - target:
-      kind: ServiceAccount
-      name: streamforge-db-migrator
-    patch: |-
-      - op: add
-        path: /metadata/annotations
-        value:
-          argocd.argoproj.io/sync-wave: "-2"
   # Migration (catalog, upload) là hook Sync: chạy lại ở mỗi lần đồng bộ, xong thì ArgoCD mới rollout app
   - target:
       kind: Job
@@ -270,6 +288,7 @@ patches:
           argocd.argoproj.io/hook: Sync
           argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
           argocd.argoproj.io/sync-wave: "-1"
+${sa_patches}
 EOF
 kubectl kustomize "$GITOPS" >/dev/null
 

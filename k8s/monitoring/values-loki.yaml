@@ -1,5 +1,5 @@
 # Loki chế độ single binary: một pod, dữ liệu trên S3 (bucket của terraform/layers/observability).
-# Tên bucket do install.sh truyền qua --set. Quyền S3 qua EKS Pod Identity (ServiceAccount "loki").
+# Tên bucket do install.sh truyền qua --set. Quyền S3 qua IRSA (ServiceAccount "loki", annotation role-arn do install.sh thêm).
 deploymentMode: SingleBinary
 
 loki:

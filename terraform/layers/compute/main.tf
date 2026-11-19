@@ -1,6 +1,6 @@
-# EKS Auto Mode: AWS quản lý node (Karpenter), ALB controller, EBS CSI và Pod Identity agent.
+# EKS Auto Mode: AWS quản lý node (Karpenter), ALB controller, EBS CSI.
 # Node API/KEDA và node Spot cho worker được khai báo bằng NodePool trong k8s/cluster/.
-# Pod dùng EKS Pod Identity với các policy của layer identity.
+# Pod dùng IRSA (OIDC của cụm) với các policy của layer identity.
 
 locals {
   layer        = "compute"
@@ -50,6 +50,9 @@ module "eks" {
 
   endpoint_public_access       = true
   endpoint_public_access_cidrs = var.endpoint_public_access_cidrs
+
+  # OIDC provider cho IRSA (các role pod ở layer compute, database, services, observability)
+  enable_irsa = true
 
   # Người chạy terraform apply có quyền admin trong cluster (access entry)
   enable_cluster_creator_admin_permissions = true
@@ -130,13 +133,28 @@ resource "aws_vpc_security_group_egress_rule" "alb_all" {
   ip_protocol       = "-1"
 }
 
-# ---------------- EKS Pod Identity
-data "aws_iam_policy_document" "pod_identity_trust" {
+# ---------------- IRSA (IAM Roles for Service Accounts)
+# Mỗi role chỉ tin đúng một ServiceAccount của cụm này, qua OIDC provider mà module EKS tạo. Pod nhận token
+# từ webhook của EKS (ServiceAccount có annotation eks.amazonaws.com/role-arn) và đổi lấy credential tạm.
+# OIDC provider gắn với từng cụm: dựng lại cụm thì phải apply lại các layer có role IRSA để cập nhật trust.
+data "aws_iam_policy_document" "irsa_trust" {
+  for_each = local.pod_identities
+
   statement {
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
+      type        = "Federated"
+      identifiers = [module.eks.oidc_provider_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${module.eks.oidc_provider}:sub"
+      values   = ["system:serviceaccount:${each.value.namespace}:${each.value.service_account}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${module.eks.oidc_provider}:aud"
+      values   = ["sts.amazonaws.com"]
     }
   }
 }
@@ -174,7 +192,7 @@ resource "aws_iam_role" "pod" {
   for_each = local.pod_identities
 
   name               = "${local.name_prefix}-${each.key}-pod"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust[each.key].json
 }
 
 resource "aws_iam_role_policy_attachment" "pod" {
@@ -182,15 +200,6 @@ resource "aws_iam_role_policy_attachment" "pod" {
 
   role       = aws_iam_role.pod[each.key].name
   policy_arn = each.value.policy_arn
-}
-
-resource "aws_eks_pod_identity_association" "pod" {
-  for_each = local.pod_identities
-
-  cluster_name    = module.eks.cluster_name
-  namespace       = each.value.namespace
-  service_account = each.value.service_account
-  role_arn        = aws_iam_role.pod[each.key].arn
 }
 
 # ---------------- Outputs
@@ -204,6 +213,15 @@ output "kubeconfig_command" {
 
 output "ecr_repository_urls" {
   value = { for k, r in aws_ecr_repository.app : k => r.repository_url }
+}
+
+output "pod_role_arns" {
+  description = "Role IRSA của worker và KEDA (k8s/deploy.sh gắn vào ServiceAccount)"
+  value       = { for k, r in aws_iam_role.pod : k => r.arn }
+}
+
+output "oidc_provider_arn" {
+  value = module.eks.oidc_provider_arn
 }
 
 output "alb_security_group_id" {

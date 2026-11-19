@@ -1,4 +1,4 @@
-# Các service HTTP của StreamForge (account, upload, catalog, playback, live). Mỗi service có ServiceAccount (IAM role riêng qua Pod Identity),
+# Các service HTTP của StreamForge (account, upload, catalog, playback, live). Mỗi service có ServiceAccount (IAM role riêng qua IRSA),
 # Rollout (Argo Rollouts, canary), Service và PodDisruptionBudget. ALB Ingress (ingress.yaml) chia /api/* theo đường dẫn.
 # Service không gọi database của nhau; dữ liệu đi qua sự kiện EventBridge (xem src/shared/src/events.js).
 ---
@@ -49,7 +49,7 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-account
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -176,7 +176,7 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-upload
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -308,7 +308,7 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-catalog
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -442,7 +442,7 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-playback
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -579,7 +579,7 @@ spec:
         streamforge.io/tier: http
     spec:
       serviceAccountName: streamforge-live
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

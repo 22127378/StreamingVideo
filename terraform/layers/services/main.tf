@@ -3,8 +3,8 @@
 # - EventBridge bus <prefix>-events. Service phát sự kiện (source "streamforge.<service>"), rule chuyển:
 #     VideoUploaded           -> hàng đợi transcode (chỉ phần detail, chính là job của worker)
 #     mọi sự kiện StreamForge -> hàng đợi <prefix>-catalog-events (catalog dựng dữ liệu từ đó)
-# - Mỗi service HTTP (account, upload, catalog, playback, live) một IAM role gắn vào ServiceAccount qua EKS Pod
-#   Identity, chỉ có đúng quyền của service đó. Upload, catalog và live có user Aurora riêng (IAM auth), mỗi
+# - Mỗi service HTTP (account, upload, catalog, playback, live) một IAM role gắn vào ServiceAccount qua IRSA
+#   (OIDC của cụm), chỉ có đúng quyền của service đó. Upload, catalog và live có user Aurora riêng (IAM auth), mỗi
 #   user chỉ thấy schema của mình. Worker không còn quyền database, chỉ được phát sự kiện.
 # Áp dụng sau compute, auth, database (đọc cụm, user pool, cluster Aurora theo tên).
 
@@ -121,13 +121,35 @@ resource "aws_sqs_queue_policy" "catalog" {
   policy    = data.aws_iam_policy_document.queue_from_rule["catalog"].json
 }
 
-# ---------------- Quyền của từng service
-data "aws_iam_policy_document" "pod_identity_trust" {
+# ---------------- Quyền của từng service (IRSA)
+# OIDC provider gắn với từng cụm: dựng lại cụm thì apply lại layer này để trust trỏ vào provider mới.
+data "aws_eks_cluster" "this" {
+  name = local.cluster_name
+}
+
+locals {
+  oidc_host = replace(data.aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")
+  oidc_arn  = "arn:aws:iam::${local.account_id}:oidc-provider/${local.oidc_host}"
+}
+
+data "aws_iam_policy_document" "irsa_trust" {
+  for_each = local.services
+
   statement {
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
+      type        = "Federated"
+      identifiers = [local.oidc_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:sub"
+      values   = ["system:serviceaccount:${local.namespace}:streamforge-${each.key}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:aud"
+      values   = ["sts.amazonaws.com"]
     }
   }
 }
@@ -260,8 +282,8 @@ locals {
 resource "aws_iam_role" "service" {
   for_each           = local.services
   name               = "${local.name_prefix}-${each.key}-pod"
-  description        = "StreamForge ${each.key} service (EKS Pod Identity)"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  description        = "StreamForge ${each.key} service (IRSA)"
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust[each.key].json
 }
 
 resource "aws_iam_role_policy" "service" {
@@ -271,14 +293,6 @@ resource "aws_iam_role_policy" "service" {
   policy   = local.service_policies[each.key]
 }
 
-resource "aws_eks_pod_identity_association" "service" {
-  for_each        = local.services
-  cluster_name    = local.cluster_name
-  namespace       = local.namespace
-  service_account = "streamforge-${each.key}"
-  role_arn        = aws_iam_role.service[each.key].arn
-}
-
 # Worker (role ở layer compute): báo kết quả transcode bằng sự kiện thay vì ghi database
 resource "aws_iam_role_policy" "worker_events" {
   name   = "publish-events"
@@ -286,7 +300,11 @@ resource "aws_iam_role_policy" "worker_events" {
   policy = data.aws_iam_policy_document.publish_events.json
 }
 
-# ---------------- Outputs (k8s/deploy.sh đưa vào ConfigMap)
+# ---------------- Outputs (k8s/deploy.sh đưa vào ConfigMap và annotation ServiceAccount)
+output "service_role_arns" {
+  value = { for k, r in aws_iam_role.service : k => r.arn }
+}
+
 output "event_bus_name" {
   value = aws_cloudwatch_event_bus.this.name
 }

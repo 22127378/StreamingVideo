@@ -3,8 +3,8 @@ kind: Namespace
 metadata:
   name: streamforge
 ---
-# Tên ServiceAccount phải khớp aws_eks_pod_identity_association ở terraform/layers/services.
-# ServiceAccount của 4 service HTTP nằm trong services.yaml.
+# Tên ServiceAccount phải khớp điều kiện "sub" trong trust policy IRSA ở terraform/layers/services (và compute cho worker).
+# Annotation eks.amazonaws.com/role-arn do overlay envs/dev thêm (k8s/deploy.sh). ServiceAccount của các service HTTP nằm trong services.yaml.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

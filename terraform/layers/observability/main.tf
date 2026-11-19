@@ -1,7 +1,7 @@
 # Giám sát. Trong cụm dùng bộ Grafana (k8s/monitoring/): Alloy gom log pod -> Loki, Prometheus gom metric
 # (pod, node, Kubernetes, /metrics của API và worker), Alertmanager gửi cảnh báo, Grafana hiển thị tất cả.
 # Layer này tạo phần AWS mà bộ đó cần, và phần chỉ AWS thu được:
-#   - Bucket S3 cho Loki; role Pod Identity cho Loki (S3), Alertmanager (SNS) và Grafana (đọc CloudWatch).
+#   - Bucket S3 cho Loki; role IRSA cho Loki (S3), Alertmanager (SNS) và Grafana (đọc CloudWatch).
 #   - SNS -> email: kênh cảnh báo chung cho Alertmanager và CloudWatch Alarm.
 #   - CloudFront access log -> CloudWatch Logs /streamforge/<env>/cloudfront (Grafana đọc qua datasource CloudWatch).
 #   - CloudWatch Alarm cho SQS và CloudFront: vẫn báo được khi cụm gặp sự cố.
@@ -60,13 +60,34 @@ module "loki_bucket" {
   expire_after_days = var.log_retention_days + 1
 }
 
-# ---------------- Pod Identity cho các thành phần giám sát
-data "aws_iam_policy_document" "pod_identity_trust" {
+# ---------------- IRSA cho các thành phần giám sát
+data "aws_eks_cluster" "this" {
+  name = local.cluster
+}
+
+locals {
+  oidc_host = replace(data.aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")
+  oidc_arn  = "arn:aws:iam::${local.account_id}:oidc-provider/${local.oidc_host}"
+}
+
+data "aws_iam_policy_document" "irsa_trust" {
+  for_each = local.pod_identities
+
   statement {
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
+      type        = "Federated"
+      identifiers = [local.oidc_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:sub"
+      values   = ["system:serviceaccount:${local.namespace}:${each.value.service_account}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:aud"
+      values   = ["sts.amazonaws.com"]
     }
   }
 }
@@ -132,7 +153,7 @@ locals {
 resource "aws_iam_role" "monitoring" {
   for_each           = local.pod_identities
   name               = "${local.name_prefix}-${each.key}-pod"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust[each.key].json
 }
 
 resource "aws_iam_role_policy" "monitoring" {
@@ -142,12 +163,8 @@ resource "aws_iam_role_policy" "monitoring" {
   policy   = each.value.policy
 }
 
-resource "aws_eks_pod_identity_association" "monitoring" {
-  for_each        = local.pod_identities
-  cluster_name    = local.cluster
-  namespace       = local.namespace
-  service_account = each.value.service_account
-  role_arn        = aws_iam_role.monitoring[each.key].arn
+output "monitoring_role_arns" {
+  value = { for k, r in aws_iam_role.monitoring : k => r.arn }
 }
 
 # ---------------- CloudFront access log -> CloudWatch Logs (vended logs v2)

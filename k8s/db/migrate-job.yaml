@@ -1,6 +1,6 @@
 # Migration database: mỗi service có schema và user riêng (catalog, upload, live), chạy bằng image của chính service.
 # Chạy trước khi rollout app: hook Sync của ArgoCD (wave -1), hoặc k8s/deploy.sh khi chưa có ArgoCD.
-# ServiceAccount có Pod Identity đọc mật khẩu master (Secrets Manager).
+# ServiceAccount có role IRSA đọc mật khẩu master (Secrets Manager).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,7 +23,7 @@ spec:
         app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
@@ -65,7 +65,7 @@ spec:
         app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
@@ -107,7 +107,7 @@ spec:
         app: streamforge-migrate
     spec:
       serviceAccountName: streamforge-db-migrator
-      # Pod Identity gắn token riêng (eks-pod-identity-token), pod không gọi Kubernetes API
+      # IRSA: webhook của EKS gắn token riêng (aws-iam-token) cho ServiceAccount có annotation role-arn; pod không cần token Kubernetes API
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
