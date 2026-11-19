@@ -8,8 +8,9 @@
 #   ./k8s/teardown.sh
 #
 # Muốn về gần $0 thì xoá thêm database (Aurora, chụp bản sao cuối trước khi xoá) và networking. Tên bản sao
-# phải chưa tồn tại, nên đặt theo ngày; apply trước để tên mới nằm trong state rồi mới destroy:
-#   SNAP=streamforge-dev-final-$(date +%Y%m%d)
+# phải chưa tồn tại, nên đặt theo ngày giờ (huỷ hai lần trong một ngày vẫn không trùng); apply trước để tên
+# mới nằm trong state rồi mới destroy:
+#   SNAP=streamforge-dev-final-$(date +%Y%m%d-%H%M)
 #   terraform -chdir=terraform/layers/database apply   -var deletion_protection=false -var final_snapshot_identifier=$SNAP
 #   terraform -chdir=terraform/layers/database destroy -var deletion_protection=false -var final_snapshot_identifier=$SNAP
 #   terraform -chdir=terraform/layers/networking destroy
